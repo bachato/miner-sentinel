@@ -71,8 +71,8 @@ DATABASES = {
         'NAME': config('POSTGRES_DB', default='minersentinel'),
         'USER': config('POSTGRES_USER', default='minersentinel'),
         'PASSWORD': config('POSTGRES_PASSWORD', default='changeme'),
-        'HOST': config('DB_HOST', default='postgres'),
-        'PORT': config('DB_PORT', default='5432'),
+        'HOST': config('POSTGRES_HOST', default='postgres'),
+        'PORT': config('POSTGRES_PORT', default='5432'),
     }
 }
 
