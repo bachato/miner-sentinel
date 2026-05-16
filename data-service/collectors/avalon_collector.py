@@ -120,7 +120,7 @@ class AvalonCollector:
                         mm_id0_start = part.find('MM ID0=')
                         if mm_id0_start != -1:
                             # Extract everything after MM ID0= until the next field
-                            mm_id0_content = part[mm_id0_start + 7:]  # Skip "MM ID0="
+                            mm_id0_content = part[mm_id0_start + 7 :]  # Skip "MM ID0="
                             # Find where this field ends (look for next major field)
                             for end_marker in [',MM Count=', ',Nonce Mask=', '|']:
                                 end_pos = mm_id0_content.find(end_marker)
@@ -167,9 +167,7 @@ class AvalonCollector:
                 logger.info(f"Successfully sent restart command to device {device_id}")
 
                 # Send notification about the restart
-                self.telegram_notifier.send_device_restart_notification(
-                    device_id, device_name
-                )
+                self.telegram_notifier.send_device_restart_notification(device_id, device_name)
                 return True
             else:
                 logger.warning(f"Restart command may have failed for device {device_id}: {response}")
@@ -186,13 +184,16 @@ class AvalonCollector:
 
         try:
             # Get last 3 hashrate values
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT hashrate_ghs
                 FROM avalon_mining_stats
                 WHERE device_id = %s
                 ORDER BY recorded_at DESC
                 LIMIT 3
-            """, (device_db_id,))
+            """,
+                (device_db_id,),
+            )
 
             recent_hashrates = [row[0] for row in cursor.fetchall()]
 
@@ -202,9 +203,7 @@ class AvalonCollector:
                     logger.warning(f"Hashrate stagnation detected for {device_id}")
 
                     # Send alert notification
-                    self.telegram_notifier.send_hashrate_alert(
-                        device_id, device_name, current_hashrate, 3
-                    )
+                    self.telegram_notifier.send_hashrate_alert(device_id, device_name, current_hashrate, 3)
 
                     # Attempt automatic restart
                     logger.info(f"Attempting automatic restart for device {device_id} due to hashrate stagnation")
@@ -223,11 +222,14 @@ class AvalonCollector:
 
         try:
             # Get current device status
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT is_active, last_seen_at, device_name
                 FROM avalon_devices
                 WHERE device_id = %s
-            """, (device_id,))
+            """,
+                (device_id,),
+            )
 
             result = cursor.fetchone()
             if not result:
@@ -236,12 +238,15 @@ class AvalonCollector:
             current_status, last_seen, device_name = result
 
             # Update device status
-            cursor.execute("""
+            cursor.execute(
+                """
                 UPDATE avalon_devices
                 SET last_seen_at = CASE WHEN %s THEN NOW() ELSE last_seen_at END,
                     error_message = %s
                 WHERE device_id = %s
-            """, (is_online, error_message, device_id))
+            """,
+                (is_online, error_message, device_id),
+            )
 
             conn.commit()
 
@@ -250,9 +255,7 @@ class AvalonCollector:
                 # Device went offline
                 last_seen_str = last_seen.strftime("%Y-%m-%d %H:%M:%S") if last_seen else "Unknown"
                 logger.warning(f"Device {device_id} went offline. Last seen: {last_seen_str}")
-                self.telegram_notifier.send_device_offline_alert(
-                    device_id, device_name or device_id, last_seen_str, error_message
-                )
+                self.telegram_notifier.send_device_offline_alert(device_id, device_name or device_id, last_seen_str, error_message)
 
             elif not current_status and is_online:
                 # Device came back online
@@ -269,9 +272,7 @@ class AvalonCollector:
                     duration_str = "Unknown"
 
                 logger.info(f"Device {device_id} came back online after {duration_str}")
-                self.telegram_notifier.send_device_online_alert(
-                    device_id, device_name or device_id, duration_str
-                )
+                self.telegram_notifier.send_device_online_alert(device_id, device_name or device_id, duration_str)
 
         except Exception as e:
             logger.error(f"Error updating device status for {device_id}: {e}")
@@ -301,13 +302,16 @@ class AvalonCollector:
         try:
             # Get the previous best difficulty from the last record
             # For Avalon, best share is stored in the 'difficulty' field
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT difficulty
                 FROM avalon_mining_stats
                 WHERE device_id = %s AND difficulty > 0
                 ORDER BY recorded_at DESC
                 LIMIT 1 OFFSET 1
-            """, (device_db_id,))
+            """,
+                (device_db_id,),
+            )
 
             result = cursor.fetchone()
             previous_best = result[0] if result else 0
@@ -317,15 +321,11 @@ class AvalonCollector:
                 improvement = ((current_best_diff - previous_best) / previous_best) * 100
                 if improvement >= 5:  # 5% improvement threshold
                     logger.info(f"New best difficulty for Avalon {device_id}: {current_best_diff}")
-                    self.telegram_notifier.send_best_difficulty_alert(
-                        device_id, device_name, current_best_diff, previous_best
-                    )
+                    self.telegram_notifier.send_best_difficulty_alert(device_id, device_name, current_best_diff, previous_best)
             elif current_best_diff > 0 and previous_best == 0:
                 # First ever best share for this device
                 logger.info(f"First best difficulty recorded for Avalon {device_id}: {current_best_diff}")
-                self.telegram_notifier.send_best_difficulty_alert(
-                    device_id, device_name, current_best_diff, 0
-                )
+                self.telegram_notifier.send_best_difficulty_alert(device_id, device_name, current_best_diff, 0)
 
         except Exception as e:
             logger.error(f"Error checking best difficulty for Avalon {device_id}: {e}")
@@ -468,19 +468,23 @@ class AvalonCollector:
             cursor = conn.cursor()
 
             # Get device name from database
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT id, device_name FROM avalon_devices WHERE device_id = %s
-            """, (device_id,))
+            """,
+                (device_id,),
+            )
             device_row = cursor.fetchone()
             device_db_id = device_row[0] if device_row else None
             device_name = device_row[1] if device_row else device_id
 
             # Use timezone-aware datetime
             from datetime import datetime, timezone
+
             recorded_at = datetime.now(timezone.utc)
 
             # Parse mining data from summary
-            hashrate_ghs = self._parse_hashrate_mhs(summary_info.get('MHS av', '0'))
+            hashrate_ghs = self._parse_hashrate_mhs(summary_info.get('MHS 5s', '0'))
             uptime_seconds = int(summary_info.get('Elapsed', 0))
             shares_accepted = int(summary_info.get('Accepted', 0))
             shares_rejected = int(summary_info.get('Rejected', 0))
@@ -492,25 +496,16 @@ class AvalonCollector:
             pool_user = pools_info.get('User') if pools_info else None
 
             # Insert mining stats
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO avalon_mining_stats (
                     device_id, recorded_at, hashrate_ghs, shares_accepted,
                     shares_rejected, blocks_found, uptime_seconds,
                     difficulty, pool_url, pool_user, created_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                device_db_id,
-                recorded_at,
-                hashrate_ghs,
-                shares_accepted,
-                shares_rejected,
-                blocks_found,
-                uptime_seconds,
-                best_share,
-                pool_url,
-                pool_user,
-                recorded_at
-            ))
+            """,
+                (device_db_id, recorded_at, hashrate_ghs, shares_accepted, shares_rejected, blocks_found, uptime_seconds, best_share, pool_url, pool_user, recorded_at),
+            )
 
             # Check for best difficulty improvement and send notifications
             if best_share > 0:
@@ -527,25 +522,19 @@ class AvalonCollector:
             efficiency = (power_watts / (hashrate_ghs / 1000.0)) if hashrate_ghs > 0 else 0
 
             # Insert hardware logs
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO avalon_hardware_logs (
                     device_id, recorded_at, power_watts, efficiency_j_per_th,
                     temperature_c, fan_speed_rpm, voltage, frequency_mhz, created_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                device_db_id,
-                recorded_at,
-                power_watts,
-                efficiency,
-                temperature_c,
-                fan_speed_rpm,
-                voltage,
-                frequency_mhz,
-                recorded_at
-            ))
+            """,
+                (device_db_id, recorded_at, power_watts, efficiency, temperature_c, fan_speed_rpm, voltage, frequency_mhz, recorded_at),
+            )
 
             # Insert extended system info
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO avalon_system_info (
                     device_id, recorded_at, device_model, firmware_version, hardware_version,
                     serial_number, mac_address, ip_address, hostname, wifi_ssid, wifi_signal_strength,
@@ -557,30 +546,33 @@ class AvalonCollector:
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s
                 )
-            """, (
-                device_db_id, recorded_at,
-                version_info.get('MODEL'),
-                version_info.get('CGMiner'),
-                version_info.get('HWTYPE'),
-                version_info.get('DNA'),
-                version_info.get('MAC'),
-                device_ip,
-                device_name,
-                None,  # WiFi SSID not available in current API
-                None,  # WiFi signal not available
-                pool_url,
-                pool_user,
-                None,  # Backup pool would need additional parsing
-                None,  # Backup pool user
-                pool_url,  # Active pool (assuming first alive pool)
-                uptime_seconds,
-                self._parse_memory_usage_from_stats(stats_info),
-                0.0,  # Storage usage not available
-                frequency_mhz,
-                voltage,
-                False,  # Auto tune status not directly available
-                recorded_at
-            ))
+            """,
+                (
+                    device_db_id,
+                    recorded_at,
+                    version_info.get('MODEL'),
+                    version_info.get('CGMiner'),
+                    version_info.get('HWTYPE'),
+                    version_info.get('DNA'),
+                    version_info.get('MAC'),
+                    device_ip,
+                    device_name,
+                    None,  # WiFi SSID not available in current API
+                    None,  # WiFi signal not available
+                    pool_url,
+                    pool_user,
+                    None,  # Backup pool would need additional parsing
+                    None,  # Backup pool user
+                    pool_url,  # Active pool (assuming first alive pool)
+                    uptime_seconds,
+                    self._parse_memory_usage_from_stats(stats_info),
+                    0.0,  # Storage usage not available
+                    frequency_mhz,
+                    voltage,
+                    False,  # Auto tune status not directly available
+                    recorded_at,
+                ),
+            )
 
             conn.commit()
             cursor.close()

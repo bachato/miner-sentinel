@@ -9,10 +9,14 @@ export const getBestShare = (mining, pool) => {
 
   for (const value of sources) {
     if (value && value > 0) {
-      if (value >= 1000000) {
-        return `${(value / 1000000).toFixed(1)}M`
+      if (value >= 1000000000000) {
+        return `${(value / 1000000000000).toFixed(1)} T`
+      } else if (value >= 1000000000) {
+        return `${(value / 1000000000).toFixed(1)} G`
+      } else if (value >= 1000000) {
+        return `${(value / 1000000).toFixed(1)} M`
       } else if (value >= 1000) {
-        return `${(value / 1000).toFixed(1)}K`
+        return `${(value / 1000).toFixed(1)} K`
       } else {
         return value.toLocaleString('en-US', { maximumFractionDigits: 0 })
       }

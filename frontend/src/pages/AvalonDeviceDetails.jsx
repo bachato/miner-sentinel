@@ -1,28 +1,28 @@
 import {
-    Activity,
-    ArrowLeft,
-    CheckCircle2,
-    Clock,
-    Cpu,
-    Gauge,
-    Hash,
-    Network,
-    RefreshCw,
-    Server,
-    Thermometer,
-    TrendingUp,
-    Zap
-} from 'lucide-react'
-import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+  Activity,
+  ArrowLeft,
+  CheckCircle2,
+  Clock,
+  Cpu,
+  Gauge,
+  Hash,
+  Network,
+  RefreshCw,
+  Server,
+  Thermometer,
+  TrendingUp,
+  Zap
+} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import api from '@/lib/api'
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import api from '@/lib/api';
 
 // Status indicator with animated pulse
 const StatusIndicator = ({ isActive }) => (
@@ -68,7 +68,7 @@ const HealthBar = ({ label, value, max, unit = '', thresholds = { warning: 70, d
     <div className="space-y-1">
       <div className="flex justify-between text-sm">
         <span className="text-muted-foreground">{label}</span>
-        <span className="font-medium">{value?.toFixed(1)}{unit}</span>
+        <span className="font-medium">{value}{unit}</span>
       </div>
       <div className="h-2 bg-muted rounded-full overflow-hidden">
         <div className={`h-full ${status} transition-all duration-500`} style={{ width: `${percentage}%` }} />

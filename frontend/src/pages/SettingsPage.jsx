@@ -283,7 +283,7 @@ export default function SettingsPage() {
                 <TableCell className="font-mono text-xs sm:text-sm">{device.ip_address}</TableCell>
                 <TableCell>
                 {device.is_active ? (
-                  device.last_seen_at ? (
+                  device.last_seen_at && new Date(device.last_seen_at) > new Date(Date.now() - 5 * 60 * 1000) ? (
                     <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/20">
                       <Wifi className="w-3 h-3 mr-1" />
                       Online

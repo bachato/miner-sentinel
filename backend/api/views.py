@@ -382,10 +382,16 @@ def overview_analytics(request):
             current_shares_rejected += latest_mining.shares_rejected or 0
 
     # Get the latest best share from recent data
-    current_best_share = BitAxeMiningStats.objects.filter(
-        recorded_at__gte=start_time_hours,
-        best_difficulty__isnull=False
-    ).order_by('-best_difficulty').first()
+    best_share_bitaxe_latest = BitAxeMiningStats.objects.filter(best_difficulty__isnull=False).order_by('-best_difficulty').values('best_difficulty', 'recorded_at').first()
+    best_share_avalon_latest = AvalonMiningStats.objects.filter(difficulty__isnull=False).order_by('-difficulty').values('difficulty', 'recorded_at').first()
+    best_share_ever_latest = None
+    if best_share_bitaxe_latest and best_share_avalon_latest:
+        best_share_ever_latest = best_share_bitaxe_latest if (best_share_bitaxe_latest['best_difficulty'] or 0) >= (best_share_avalon_latest['difficulty'] or 0) else { 'best_difficulty': best_share_avalon_latest['difficulty'], 'recorded_at': best_share_avalon_latest['recorded_at'] }
+    elif best_share_bitaxe_latest:
+        best_share_ever_latest = best_share_bitaxe_latest
+    elif best_share_avalon_latest:
+        best_share_ever_latest = { 'best_difficulty': best_share_avalon_latest['difficulty'], 'recorded_at': best_share_avalon_latest['recorded_at'] }
+
 
     result['mining']['current'] = {
         'total_hashrate_ghs': round(current_hashrate_total_ghs, 2),
@@ -394,8 +400,8 @@ def overview_analytics(request):
         'total_shares_rejected': current_shares_rejected,
         'rejection_rate': round((current_shares_rejected / (current_shares_accepted + current_shares_rejected) * 100), 2) if (current_shares_accepted + current_shares_rejected) > 0 else 0,
         'acceptance_rate': round((current_shares_accepted / (current_shares_accepted + current_shares_rejected) * 100), 2) if (current_shares_accepted + current_shares_rejected) > 0 else 0,
-        'best_share_difficulty': current_best_share.best_difficulty if current_best_share else None,
-        'best_share_timestamp': current_best_share.recorded_at.isoformat() if current_best_share else None,
+        'best_share_difficulty': best_share_ever_latest['best_difficulty'] if best_share_ever_latest else None,
+        'best_share_timestamp': best_share_ever_latest['recorded_at'].isoformat() if best_share_ever_latest else None,
     }
 
     # Period Mining Stats (aggregated over time for both device types)
@@ -447,13 +453,12 @@ def overview_analytics(request):
     }
 
     # Mining Efficiency Metrics
-    best_share_latest = BitAxeMiningStats.objects.filter(best_difficulty__isnull=False).order_by('-best_difficulty').first()
     result['mining']['efficiency'] = {
         'shares_per_hour': round(combined_shares_accepted / hours, 1) if hours > 0 else 0,
         'shares_per_day': round(combined_shares_accepted / days, 1) if days > 0 else 0,
         'rejection_rate': round((combined_shares_rejected / (combined_shares_accepted + combined_shares_rejected) * 100), 2) if (combined_shares_accepted + combined_shares_rejected) > 0 else 0,
-        'best_share_ever': best_share_latest.best_difficulty if best_share_latest else 0,
-        'best_share_timestamp': best_share_latest.recorded_at.isoformat() if best_share_latest else None,
+        'best_share_ever': best_share_ever_latest['best_difficulty'] if best_share_ever_latest else 0,
+        'best_share_timestamp': best_share_ever_latest['recorded_at'].isoformat() if best_share_ever_latest else None,
         'avg_efficiency': round(combined_avg_hashrate / total_device_count, 2) if total_device_count > 0 else 0,
     }
 
