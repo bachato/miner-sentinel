@@ -1,3 +1,6 @@
+import ErrorState from '@/components/feedback/ErrorState'
+import DataFreshness from '@/components/metrics/DataFreshness'
+import SectionHeader from '@/components/layout/SectionHeader'
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -5,6 +8,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import api from '@/lib/api';
+import { useTimeRange } from '@/lib/TimeRangeContext';
+import { formatRangeWindow, getChartTimeAxisConfig, toAnalyticsParams } from '@/lib/timeRange';
 import {
   Activity,
   AlertTriangle,
@@ -214,7 +219,7 @@ function EnergyAnalysisCard({ energy }) {
   const pieData = devices.map((d, i) => ({
     name: d.device_name || 'Unknown',
     value: d.power_watts || 0,
-    fill: i === 0 ? 'hsl(var(--primary))' : i === 1 ? 'hsl(var(--chart-2))' : `hsl(${220 + i * 40}, 70%, 50%)`
+    fill: i === 0 ? 'var(--primary)' : i === 1 ? 'var(--chart-2)' : `hsl(${220 + i * 40}, 70%, 50%)`
   }))
 
   return (
@@ -463,7 +468,7 @@ function DeviceComparisonTable({ devices }) {
       </CardHeader>
       <CardContent className="px-2 sm:px-6">
         <div className="overflow-x-auto -mx-2 sm:mx-0">
-          <Table className="min-w-[700px]">
+          <Table className="min-w-[560px] sm:min-w-[700px]">
             <TableHeader>
               <TableRow>
                 <TableHead>Device</TableHead>
@@ -507,7 +512,8 @@ function DeviceComparisonTable({ devices }) {
 }
 
 // Historical Best Shares Chart
-function BestSharesHistoryChart({ dailyBests }) {
+function BestSharesHistoryChart({ dailyBests, rangeLabel, rangeHours = 24 * 30 }) {
+  const timeAxis = getChartTimeAxisConfig(rangeHours)
   if (!dailyBests || dailyBests.length === 0) {
     return (
       <Card>
@@ -524,34 +530,60 @@ function BestSharesHistoryChart({ dailyBests }) {
     )
   }
 
-  // Format data for chart
+  // Format data for chart — keep raw date for adaptive axis labels
   const chartData = dailyBests.map(item => ({
     date: item.date,
-    dateFormatted: new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    bestEver: item.best_difficulty || 0,           // All-time best difficulty
-    bestSession: item.best_session_difficulty || 0, // Session best difficulty
+    bestEver: item.best_difficulty || 0,
+    bestSession: item.best_session_difficulty || 0,
   }))
+  const nonZeroPoints = chartData.filter(
+    (d) => (d.bestEver || 0) > 0 || (d.bestSession || 0) > 0,
+  ).length
+
+  if (nonZeroPoints === 0) {
+    return (
+      <Card className="col-span-full">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
+            <TrendingUp className="h-4 w-4 sm:h-5 sm:w-5" />
+            Best Shares History{rangeLabel ? ` (${rangeLabel})` : ''}
+          </CardTitle>
+          <CardDescription className="text-xs sm:text-sm">
+            Daily best shares: All-Time Best vs Session Best
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            No best-share samples in this range yet.
+          </p>
+        </CardContent>
+      </Card>
+    )
+  }
 
   return (
     <Card className="col-span-full">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
           <TrendingUp className="h-4 w-4 sm:h-5 sm:w-5" />
-          <span className="truncate">Best Shares History (Last 30 Days)</span>
+          <span className="truncate">
+            Best Shares History{rangeLabel ? ` (${rangeLabel})` : ''}
+          </span>
         </CardTitle>
         <CardDescription className="text-xs sm:text-sm">
           Daily best shares: All-Time Best vs Session Best
+          {nonZeroPoints < 3 ? ' · sparse data in this window' : ''}
         </CardDescription>
       </CardHeader>
       <CardContent className="px-2 sm:px-6">
         {/* Legend */}
-        <div className="flex flex-wrap gap-4 mb-4 text-xs sm:text-sm">
+        <div className="mb-4 flex flex-wrap gap-4 text-xs sm:text-sm">
           <div className="flex items-center gap-2">
-            <div className="w-4 h-0.5 bg-primary"></div>
+            <div className="h-0.5 w-4 bg-primary"></div>
             <span className="text-muted-foreground">Best Ever (All-Time)</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-4 h-0.5 bg-orange-500"></div>
+            <div className="h-0.5 w-4 bg-primary/60"></div>
             <span className="text-muted-foreground">Best Session</span>
           </div>
         </div>
@@ -560,8 +592,8 @@ function BestSharesHistoryChart({ dailyBests }) {
             <AreaChart data={chartData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="bestEverGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                  <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="var(--primary)" stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id="bestSessionGradient" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="hsl(24, 95%, 53%)" stopOpacity={0.2} />
@@ -570,7 +602,10 @@ function BestSharesHistoryChart({ dailyBests }) {
               </defs>
               <CartesianGrid strokeDasharray="3 3" className="stroke-muted/30" />
               <XAxis
-                dataKey="dateFormatted"
+                dataKey="date"
+                tickFormatter={timeAxis.tick}
+                minTickGap={timeAxis.minTickGap}
+                interval={timeAxis.interval}
                 className="text-xs"
                 axisLine={false}
                 tickLine={false}
@@ -587,11 +622,7 @@ function BestSharesHistoryChart({ dailyBests }) {
                     return (
                       <div className="rounded-lg border bg-background/95 backdrop-blur p-3 shadow-lg">
                         <div className="text-xs text-muted-foreground mb-2">
-                          {new Date(payload[0]?.payload?.date).toLocaleDateString('en-US', {
-                            weekday: 'short',
-                            month: 'short',
-                            day: 'numeric'
-                          })}
+                          {timeAxis.tooltip(payload[0]?.payload?.date)}
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div className="flex flex-col">
@@ -622,7 +653,7 @@ function BestSharesHistoryChart({ dailyBests }) {
               <Area
                 type="monotone"
                 dataKey="bestEver"
-                stroke="hsl(var(--primary))"
+                stroke="var(--primary)"
                 fill="url(#bestEverGradient)"
                 strokeWidth={2}
                 name="Best Ever"
@@ -665,7 +696,7 @@ function TopSharesTable({ topShares }) {
       </CardHeader>
       <CardContent className="px-2 sm:px-6">
         <div className="overflow-x-auto -mx-2 sm:mx-0">
-        <Table className="min-w-[400px]">
+        <Table className="min-w-[320px] sm:min-w-[400px]">
           <TableHeader>
             <TableRow>
               <TableHead className="w-10 sm:w-12">#</TableHead>
@@ -708,7 +739,8 @@ function TopSharesTable({ topShares }) {
 }
 
 // Power Trend Chart
-function PowerTrendChart({ powerTrend }) {
+function PowerTrendChart({ powerTrend, rangeHours = 24 }) {
+  const timeAxis = getChartTimeAxisConfig(rangeHours)
   if (!powerTrend || powerTrend.length === 0) {
     return (
       <Card>
@@ -717,7 +749,7 @@ function PowerTrendChart({ powerTrend }) {
             <Flame className="h-4 w-4 sm:h-5 sm:w-5 text-orange-500" />
             Power & Temperature Trend
           </CardTitle>
-          <CardDescription className="text-xs sm:text-sm">24-hour power consumption and temperature</CardDescription>
+          <CardDescription className="text-xs sm:text-sm">Power consumption and temperature over the selected range</CardDescription>
         </CardHeader>
         <CardContent>
           <p className="text-muted-foreground text-center py-6 sm:py-8 text-sm">No power data available</p>
@@ -739,7 +771,7 @@ function PowerTrendChart({ powerTrend }) {
           <Flame className="h-4 w-4 sm:h-5 sm:w-5 text-orange-500" />
           Power & Temperature Trend
         </CardTitle>
-        <CardDescription className="text-xs sm:text-sm">24-hour power consumption and temperature</CardDescription>
+        <CardDescription className="text-xs sm:text-sm">Power consumption and temperature over the selected range</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="h-64">
@@ -748,11 +780,12 @@ function PowerTrendChart({ powerTrend }) {
               <CartesianGrid strokeDasharray="3 3" className="stroke-muted/30" />
               <XAxis
                 dataKey="time"
-                tickFormatter={(value) => new Date(value).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                tickFormatter={timeAxis.tick}
+                minTickGap={timeAxis.minTickGap}
+                interval={timeAxis.interval}
                 className="text-xs"
                 axisLine={false}
                 tickLine={false}
-                interval="preserveStartEnd"
               />
               <YAxis
                 yAxisId="power"
@@ -776,12 +809,7 @@ function PowerTrendChart({ powerTrend }) {
                     return (
                       <div className="rounded-lg border bg-background/95 backdrop-blur p-3 shadow-lg">
                         <div className="text-xs text-muted-foreground mb-2">
-                          {new Date(label).toLocaleString('en-US', {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })}
+                          {timeAxis.tooltip(label)}
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div className="flex flex-col">
@@ -803,7 +831,7 @@ function PowerTrendChart({ powerTrend }) {
                 yAxisId="power"
                 type="monotone"
                 dataKey="power"
-                stroke="hsl(var(--chart-1))"
+                stroke="var(--chart-1)"
                 strokeWidth={2}
                 dot={false}
                 name="Power (W)"
@@ -812,7 +840,7 @@ function PowerTrendChart({ powerTrend }) {
                 yAxisId="temp"
                 type="monotone"
                 dataKey="temp"
-                stroke="hsl(var(--chart-3))"
+                stroke="var(--chart-3)"
                 strokeWidth={2}
                 dot={false}
                 name="Temp (°C)"
@@ -900,7 +928,7 @@ function EfficiencyComparisonChart({ devices }) {
                   return null
                 }}
               />
-              <Bar dataKey="efficiency" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="efficiency" fill="var(--primary)" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -1178,9 +1206,11 @@ function SoloMiningStats({ totalHashrateGhs, bestDifficulty, bestDifficultyForma
 }
 
 export default function AnalyticsDashboard() {
+  const { range } = useTimeRange()
   const [analytics, setAnalytics] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [updatedAt, setUpdatedAt] = useState(null)
 
   useEffect(() => {
     // Refresh network data (BTC price, hashrate) when visiting analytics page
@@ -1196,14 +1226,16 @@ export default function AnalyticsDashboard() {
     fetchAnalytics()
     const interval = setInterval(fetchAnalytics, 300000) // Refresh every 5 minutes
     return () => clearInterval(interval)
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range.key, range.from?.getTime?.(), range.to?.getTime?.(), range.hours, range.days])
 
   const fetchAnalytics = async () => {
     try {
       const response = await api.get('/api/analytics/detailed/', {
-        params: { hours: 24, days: 30 }
+        params: toAnalyticsParams(range),
       })
       setAnalytics(response.data)
+      setUpdatedAt(new Date())
       setError(null)
     } catch (err) {
       console.error('Error fetching analytics:', err)
@@ -1219,12 +1251,15 @@ export default function AnalyticsDashboard() {
 
   if (error || !analytics) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center space-y-4">
-          <AlertTriangle className="h-12 w-12 mx-auto text-destructive" />
-          <p className="text-muted-foreground">{error || 'Unable to load analytics'}</p>
-        </div>
-      </div>
+      <ErrorState
+        title="Unable to load analytics"
+        description={error || 'Could not load analytics data. Check that the API is running and try again.'}
+        onRetry={() => {
+          setLoading(true)
+          fetchAnalytics()
+        }}
+        className="h-96"
+      />
     )
   }
 
@@ -1239,13 +1274,18 @@ export default function AnalyticsDashboard() {
   const totalHashrateGhs = prediction.current_hashrate_ghs || 0
 
   return (
-    <div className="space-y-4 sm:space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl sm:text-3xl font-bold">Analytics Dashboard</h1>
-        <p className="text-sm sm:text-base text-muted-foreground">
-          Advanced insights, predictions, and cross-data analysis
-        </p>
+    <div className="space-y-6 sm:space-y-8">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-xs text-muted-foreground sm:text-sm">
+            Insights & predictions · period analysis for{' '}
+            <span className="font-medium text-foreground/80">{range.label.toLowerCase()}</span>
+          </p>
+          <p className="mt-0.5 text-[10px] text-muted-foreground/80 sm:text-xs">
+            {formatRangeWindow(range)}
+          </p>
+        </div>
+        <DataFreshness updatedAt={updatedAt} />
       </div>
 
       <Tabs defaultValue="predictions" className="space-y-4 sm:space-y-6">
@@ -1257,17 +1297,26 @@ export default function AnalyticsDashboard() {
           <TabsTrigger value="devices">Devices</TabsTrigger>
         </TabsList>
 
-        {/* PREDICTIONS TAB */}
+        {/* PREDICTIONS — solo mining outlook */}
         <TabsContent value="predictions" className="space-y-4 sm:space-y-6">
+          <SectionHeader
+            title="Solo mining outlook"
+            description="Statistical best-share predictions for the selected range"
+            className="mb-1"
+          />
           <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
             <PredictionCard prediction={prediction} />
             <TopSharesTable topShares={topShares} />
           </div>
-          <BestSharesHistoryChart dailyBests={dailyBests} />
+          <BestSharesHistoryChart dailyBests={dailyBests} rangeLabel={range.label} rangeHours={range.hours} />
         </TabsContent>
 
         {/* SOLO MINING TAB */}
         <TabsContent value="solo" className="space-y-4 sm:space-y-6">
+          <SectionHeader
+            title="Block odds"
+            description="Illustrative solo-mining probabilities from current hashrate"
+          />
           <SoloMiningStats
             totalHashrateGhs={totalHashrateGhs}
             bestDifficulty={prediction.all_time_best_difficulty}
@@ -1277,15 +1326,23 @@ export default function AnalyticsDashboard() {
 
         {/* ENERGY TAB */}
         <TabsContent value="energy" className="space-y-4 sm:space-y-6">
+          <SectionHeader
+            title="Energy & hardware"
+            description="Power draw, temperature trends, and efficiency"
+          />
           <div className="grid gap-4 grid-cols-1 md:grid-cols-2">
             <EnergyAnalysisCard energy={energy} />
-            <PowerTrendChart powerTrend={energy.power_trend} />
+            <PowerTrendChart powerTrend={energy.power_trend} rangeHours={range.hours} />
           </div>
           <EfficiencyComparisonChart devices={devices} />
         </TabsContent>
 
         {/* COSTS TAB */}
         <TabsContent value="costs" className="space-y-4 sm:space-y-6">
+          <SectionHeader
+            title="Energy & cost"
+            description="Electricity cost and optional revenue estimates"
+          />
           <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
             <CostAnalysisCard cost={cost} />
 

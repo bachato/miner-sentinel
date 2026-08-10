@@ -1,15 +1,16 @@
 """
 PublicPool data collector for mining pool statistics.
-Fetches data from Public Pool API (https://github.com/benjamin-wilson/public-pool) and stores it in the database.
+Fetches data from Public Pool API, normalizes, writes to pool_stats.
 
 API Endpoints used:
 - GET /api/client/:address - Get client info (workers, hashrate, bestDifficulty)
 - GET /api/pool - Get pool-wide stats (totalHashRate, totalMiners, blocksFound)
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
+from collectors.normalized import NormalizedPoolSnapshot, PoolDataWriter
 from retrying import retry
 
 logger = logging.getLogger(__name__)
@@ -138,86 +139,73 @@ class PublicPoolCollector:
         except (ValueError, TypeError):
             return '0'
 
-    def store_pool_stats(self, client_data, pool_data=None):
-        """
-        Store pool statistics in the database.
-        Uses the same bitaxe_pool_stats table for compatibility.
+    def normalize_stats(self, client_data, pool_data=None) -> NormalizedPoolSnapshot:
+        """Convert PublicPool client/pool JSON into NormalizedPoolSnapshot."""
+        total_hashrate = 0.0
+        workers_count = client_data.get('workersCount', 0)
+        workers = client_data.get('workers', []) or []
+        for worker in workers:
+            worker_hashrate = worker.get('hashRate', 0)
+            if worker_hashrate:
+                total_hashrate += float(worker_hashrate)
 
-        Args:
-            client_data: Client statistics data from API (user-specific)
-            pool_data: Pool-wide statistics data from API (optional)
-        """
+        hashrate_formatted = self.format_hashrate(total_hashrate)
+        hashrate_ghs = self.convert_hashrate_to_ghs(total_hashrate)
+        best_difficulty = float(client_data.get('bestDifficulty', 0) or 0)
+
+        pool_total_hashrate = 0.0
+        pool_total_miners = None
+        if pool_data:
+            pool_total_hashrate = float(pool_data.get('totalHashRate', 0) or 0)
+            pool_total_miners = int(pool_data.get('totalMiners', 0) or 0)
+
+        return NormalizedPoolSnapshot(
+            pool_type='publicpool',
+            pool_address=self.pool_address,
+            pool_url=self.pool_url,
+            recorded_at=datetime.now(timezone.utc),
+            # Only real window from PublicPool is "current" → map to 1m
+            hashrate_1m_ghs=hashrate_ghs,
+            hashrate_5m_ghs=None,
+            hashrate_1h_ghs=None,
+            hashrate_1d_ghs=None,
+            hashrate_7d_ghs=None,
+            hashrate_1m_display=hashrate_formatted,
+            hashrate_5m_display=None,
+            hashrate_1h_display=None,
+            hashrate_1d_display=None,
+            hashrate_7d_display=None,
+            workers=int(workers_count or 0),
+            shares=None,
+            best_share=best_difficulty,
+            best_ever=best_difficulty,
+            last_share_unix=None,
+            authorised_unix=None,
+            pool_total_miners=pool_total_miners,
+            pool_total_hashrate_ghs=self.convert_hashrate_to_ghs(pool_total_hashrate) if pool_total_hashrate else None,
+            details={
+                'source': 'publicpool',
+                'workers': workers,
+            },
+        )
+
+    def store_pool_stats(self, client_data, pool_data=None):
+        """Store pool statistics via PoolDataWriter (unified pool_stats only)."""
         if not client_data:
             logger.warning("No client data to store")
             return
 
         try:
-            cursor = self.db.cursor()
-
-            # Calculate total hashrate from workers
-            total_hashrate = 0
-            workers_count = client_data.get('workersCount', 0)
-            workers = client_data.get('workers', [])
-
-            for worker in workers:
-                worker_hashrate = worker.get('hashRate', 0)
-                if worker_hashrate:
-                    total_hashrate += float(worker_hashrate)
-
-            # Format hashrates for storage
-            hashrate_formatted = self.format_hashrate(total_hashrate)
-            hashrate_ghs = self.convert_hashrate_to_ghs(total_hashrate)
-
-            # Get best difficulty from client data
-            best_difficulty = client_data.get('bestDifficulty', 0) or 0
-
-            # Get pool-wide data if available
-            pool_total_hashrate = 0
-            pool_total_miners = 0
-            if pool_data:
-                pool_total_hashrate = pool_data.get('totalHashRate', 0) or 0
-                pool_total_miners = pool_data.get('totalMiners', 0) or 0
-
-            # Insert pool statistics (compatible with existing table structure)
-            query = """
-                INSERT INTO bitaxe_pool_stats (
-                    pool_address, recorded_at,
-                    hashrate_1m, hashrate_5m, hashrate_1hr, hashrate_1d, hashrate_7d,
-                    lastshare, workers, shares, bestshare, bestever, authorised,
-                    hashrate_1m_ghs, hashrate_1d_ghs
-                ) VALUES (
-                    %s, %s,
-                    %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s,
-                    %s, %s
-                )
-            """
-
-            values = (
-                self.pool_address,
-                datetime.now(),
-                hashrate_formatted,  # hashrate_1m - current hashrate
-                hashrate_formatted,  # hashrate_5m - same for PublicPool (no 5m stat)
-                hashrate_formatted,  # hashrate_1hr - same for PublicPool
-                hashrate_formatted,  # hashrate_1d - same for PublicPool
-                hashrate_formatted,  # hashrate_7d - same for PublicPool
-                0,                   # lastshare - not available from API
-                workers_count,       # workers count
-                0,                   # shares - not directly available
-                best_difficulty,     # bestshare - user's best difficulty
-                best_difficulty,     # bestever - same as bestshare for now
-                pool_total_miners,   # authorised - store total pool miners here
-                hashrate_ghs,        # hashrate_1m_ghs
-                hashrate_ghs,        # hashrate_1d_ghs
+            snapshot = self.normalize_stats(client_data, pool_data)
+            # Reuse open collector connection (dsn omits password — never rebuild URL from it)
+            writer = PoolDataWriter(connection=self.db)
+            writer.write_snapshot(snapshot)
+            logger.info(
+                f"Stored PublicPool stats: {snapshot.hashrate_1m_display} "
+                f"({snapshot.workers} workers) @ {snapshot.recorded_at}"
             )
-
-            cursor.execute(query, values)
-            self.db.commit()
-            logger.info(f"Stored PublicPool stats: {hashrate_formatted} ({workers_count} workers) @ {datetime.now()}")
-
         except Exception as e:
             logger.error(f"Failed to store pool stats: {e}")
-            self.db.rollback()
             raise
 
     def collect(self):

@@ -1,6 +1,7 @@
 import { ThemeProvider } from '@/components/theme-provider';
 import api from '@/lib/api';
 import { AuthProvider } from '@/lib/AuthContext';
+import { TimeRangeProvider } from '@/lib/TimeRangeContext';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,23 +15,51 @@ vi.mock('@/lib/api', () => ({
   },
 }))
 
-const mockBitaxeDevices = [
-  { id: 1, device_id: 'bitaxe-001', device_name: 'Bitaxe-1', is_active: true },
+const mockDevices = [
+  {
+    id: 1,
+    device_id: 'bitaxe-001',
+    device_name: 'Bitaxe-1',
+    name: 'Bitaxe-1',
+    make: 'bitaxe',
+    is_active: true,
+    last_seen_at: new Date().toISOString(),
+    error_message: null,
+  },
+  {
+    id: 2,
+    device_id: 'avalon-001',
+    device_name: 'Avalon-1',
+    name: 'Avalon-1',
+    make: 'avalon',
+    is_active: true,
+    last_seen_at: new Date().toISOString(),
+    error_message: null,
+  },
 ]
-const mockAvalonDevices = [
-  { id: 2, device_id: 'avalon-001', device_name: 'Avalon-1', is_active: true },
+const mockMiningLatest = [
+  {
+    device: 1, device_id_str: 'bitaxe-001', device_name: 'Bitaxe-1', device_type: 'bitaxe',
+    hashrate_ghs: 450.5, shares_accepted: 1200, shares_rejected: 5,
+    recorded_at: new Date().toISOString(),
+  },
+  {
+    device: 2, device_id_str: 'avalon-001', device_name: 'Avalon-1', device_type: 'avalon',
+    hashrate_ghs: 6500.0, shares_accepted: 500, shares_rejected: 2,
+    recorded_at: new Date().toISOString(),
+  },
 ]
-const mockBitaxeMiningStats = [
-  { device: 1, device_id: 'bitaxe-001', device_name: 'Bitaxe-1', hashrate_ghs: 450.5,
-    shares_accepted: 1200, shares_rejected: 5, recorded_at: new Date().toISOString() },
-]
-const mockBitaxeHardwareStats = [
-  { device: 1, device_id: 'bitaxe-001', device_name: 'Bitaxe-1', temperature_c: 65.0,
-    power_watts: 15.0, fan_speed_rpm: 4200, recorded_at: new Date().toISOString() },
-]
-const mockAvalonMiningStats = [
-  { device: 2, device_id: 'avalon-001', device_name: 'Avalon-1', hashrate_ghs: 6500.0,
-    shares_accepted: 500, shares_rejected: 2, recorded_at: new Date().toISOString() },
+const mockHardwareLatest = [
+  {
+    device: 1, device_id_str: 'bitaxe-001', device_name: 'Bitaxe-1', device_type: 'bitaxe',
+    temperature_c: 65.0, power_watts: 15.0, fan_speed_rpm: 4200,
+    recorded_at: new Date().toISOString(),
+  },
+  {
+    device: 2, device_id_str: 'avalon-001', device_name: 'Avalon-1', device_type: 'avalon',
+    temperature_c: 55.0, power_watts: 80.0, fan_speed_rpm: 1500,
+    recorded_at: new Date().toISOString(),
+  },
 ]
 const mockPoolStats = [
   { id: 1, pool_address: 'bc1qtest', hashrate_1m: '450M', hashrate_1d: '400M',
@@ -48,33 +77,35 @@ function buildMock(overrides = {}) {
     if (url.includes('/api/auth/user/')) {
       return Promise.resolve({ data: { authenticated: true, user: { id: 1 } } })
     }
-    // Specific pool endpoints FIRST (before generic /api/bitaxe/pool/)
-    if (url.includes('/api/bitaxe/pool/latest/')) {
+    // Specific pool endpoints FIRST (before generic /api/pool/)
+    if (url.includes('/api/pool/latest/')) {
       return Promise.resolve({ data: overrides.latestStats !== undefined ? overrides.latestStats : null })
     }
-    if (url.includes('/api/bitaxe/pool/statistics/')) {
+    if (url.includes('/api/pool/statistics/')) {
       return Promise.resolve({ data: overrides.statistics !== undefined ? overrides.statistics : null })
     }
-    if (url.includes('/api/bitaxe/pool/')) {
+    if (url.includes('/api/pool/hashrate_trend/')) {
+      return Promise.resolve({
+        data: overrides.poolStats !== undefined ? overrides.poolStats : mockPoolStats,
+      })
+    }
+    if (url.includes('/api/pool/')) {
       return Promise.resolve({ data: { results: overrides.poolStats !== undefined ? overrides.poolStats : [] } })
     }
-    if (url.includes('/api/bitaxe/devices/')) {
-      return Promise.resolve({ data: { results: overrides.bitaxeDevices !== undefined ? overrides.bitaxeDevices : mockBitaxeDevices } })
+    if (url.includes('/api/devices/')) {
+      return Promise.resolve({
+        data: { results: overrides.devices !== undefined ? overrides.devices : mockDevices },
+      })
     }
-    if (url.includes('/api/bitaxe/mining/latest/')) {
-      return Promise.resolve({ data: overrides.miningStats !== undefined ? overrides.miningStats : [] })
+    if (url.includes('/api/mining/latest/')) {
+      return Promise.resolve({
+        data: overrides.miningStats !== undefined ? overrides.miningStats : mockMiningLatest,
+      })
     }
-    if (url.includes('/api/bitaxe/hardware/latest/')) {
-      return Promise.resolve({ data: overrides.hardwareStats !== undefined ? overrides.hardwareStats : [] })
-    }
-    if (url.includes('/api/avalon/devices/')) {
-      return Promise.resolve({ data: overrides.avalonDevices !== undefined ? overrides.avalonDevices : mockAvalonDevices })
-    }
-    if (url.includes('/api/avalon/mining-stats/')) {
-      return Promise.resolve({ data: overrides.avalonMining !== undefined ? overrides.avalonMining : [] })
-    }
-    if (url.includes('/api/avalon/hardware-logs/')) {
-      return Promise.resolve({ data: overrides.avalonHardware !== undefined ? overrides.avalonHardware : [] })
+    if (url.includes('/api/hardware/latest/')) {
+      return Promise.resolve({
+        data: overrides.hardwareStats !== undefined ? overrides.hardwareStats : mockHardwareLatest,
+      })
     }
     return Promise.resolve({ data: {} })
   }
@@ -86,7 +117,9 @@ function renderWithProviders(ui, overrides = {}) {
   return render(
     <MemoryRouter>
       <ThemeProvider defaultTheme="dark" storageKey="test-theme">
-        <AuthProvider>{ui}</AuthProvider>
+        <AuthProvider>
+          <TimeRangeProvider>{ui}</TimeRangeProvider>
+        </AuthProvider>
       </ThemeProvider>
     </MemoryRouter>
   )
@@ -118,9 +151,9 @@ describe('MiningDashboard (smoke with API mocks)', () => {
 
   it('renders DeviceCards and pool charts when mining stats and pool data are available', async () => {
     renderWithProviders(<MiningDashboard />, {
-      miningStats: mockBitaxeMiningStats,
-      hardwareStats: mockBitaxeHardwareStats,
-      avalonMining: mockAvalonMiningStats,
+      miningStats: mockMiningLatest,
+      hardwareStats: mockHardwareLatest,
+      devices: mockDevices,
       poolStats: mockPoolStats,
       latestStats: mockLatestStats,
     })
@@ -170,7 +203,9 @@ describe('MiningDashboard (smoke with API mocks)', () => {
       <MemoryRouter>
         <ThemeProvider defaultTheme="dark" storageKey="test-theme">
           <AuthProvider>
-            <MiningDashboard />
+            <TimeRangeProvider>
+              <MiningDashboard />
+            </TimeRangeProvider>
           </AuthProvider>
         </ThemeProvider>
       </MemoryRouter>

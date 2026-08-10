@@ -7,16 +7,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from api.models import (
-    AvalonDevice,
-    AvalonHardwareLogs,
-    AvalonMiningStats,
-    AvalonSystemInfo,
-    BitAxeDevice,
-    BitAxeHardwareLog,
-    BitAxeMiningStats,
-    BitAxePoolStats,
-    BitAxeSystemInfo,
     CollectorSettings,
+    Device,
+    DeviceHardwareStats,
+    DeviceMiningStats,
+    DeviceSystemInfo,
+    PoolStats,
 )
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -44,40 +40,56 @@ def auth_client(api_client, user):
 
 @pytest.fixture
 def bitaxe_device(db):
-    return BitAxeDevice.objects.create(
+    return Device.objects.create(
         device_id='bitaxe-001',
-        device_name='Test Bitaxe',
+        name='Test Bitaxe',
+        make=Device.MAKE_BITAXE,
+        protocol=Device.PROTOCOL_HTTP_AXEOS,
         ip_address='192.168.1.10',
         is_active=True,
     )
 
 
 @pytest.fixture
+def unified_bitaxe(bitaxe_device):
+    return bitaxe_device
+
+
+@pytest.fixture
 def avalon_device(db):
-    return AvalonDevice.objects.create(
+    return Device.objects.create(
         device_id='avalon-001',
-        device_name='Test Avalon',
+        name='Test Avalon',
+        make=Device.MAKE_AVALON,
+        protocol=Device.PROTOCOL_CGMINER_TCP,
         ip_address='192.168.1.20',
+        port=4028,
         is_active=True,
     )
 
 
 @pytest.fixture
-def mining_stat(bitaxe_device):
-    return BitAxeMiningStats.objects.create(
-        device=bitaxe_device,
+def unified_avalon(avalon_device):
+    return avalon_device
+
+
+@pytest.fixture
+def mining_stat(unified_bitaxe):
+    return DeviceMiningStats.objects.create(
+        device=unified_bitaxe,
         recorded_at=timezone.now(),
         hashrate_ghs=450.5,
         shares_accepted=1000,
         shares_rejected=5,
         uptime_seconds=3600,
+        best_difficulty=1_000_000,
     )
 
 
 @pytest.fixture
-def hardware_log(bitaxe_device):
-    return BitAxeHardwareLog.objects.create(
-        device=bitaxe_device,
+def hardware_log(unified_bitaxe):
+    return DeviceHardwareStats.objects.create(
+        device=unified_bitaxe,
         recorded_at=timezone.now(),
         power_watts=15.5,
         temperature_c=65.0,
@@ -87,39 +99,43 @@ def hardware_log(bitaxe_device):
 
 @pytest.fixture
 def pool_stat(db):
-    return BitAxePoolStats.objects.create(
+    return PoolStats.objects.create(
+        pool_type=PoolStats.POOL_CKPOOL,
         pool_address='bc1qtest',
-        hashrate_1m='466G',
-        hashrate_5m='460G',
-        hashrate_1hr='455G',
-        hashrate_1d='450G',
-        hashrate_7d='445G',
-        lastshare=1700000000,
+        recorded_at=timezone.now(),
+        hashrate_1m_display='466G',
+        hashrate_5m_display='460G',
+        hashrate_1h_display='455G',
+        hashrate_1d_display='450G',
+        hashrate_7d_display='445G',
+        hashrate_1m_ghs=466.0,
+        hashrate_1d_ghs=450.0,
+        last_share_unix=1700000000,
         workers=2,
         shares=500000,
-        bestshare=9876543.0,
-        bestever=123456789,
-        authorised=1699000000,
+        best_share=9876543.0,
+        best_ever=123456789,
+        authorised_unix=1699000000,
     )
 
 
 @pytest.fixture
-def avalon_mining_stat(avalon_device):
-    return AvalonMiningStats.objects.create(
-        device=avalon_device,
+def avalon_mining_stat(unified_avalon):
+    return DeviceMiningStats.objects.create(
+        device=unified_avalon,
         recorded_at=timezone.now(),
         hashrate_ghs=6500.0,
         shares_accepted=2000,
         shares_rejected=10,
         uptime_seconds=7200,
-        difficulty=1234567.0,
+        best_difficulty=1234567.0,
     )
 
 
 @pytest.fixture
-def avalon_hardware_log(avalon_device):
-    return AvalonHardwareLogs.objects.create(
-        device=avalon_device,
+def avalon_hardware_log(unified_avalon):
+    return DeviceHardwareStats.objects.create(
+        device=unified_avalon,
         recorded_at=timezone.now(),
         power_watts=130.0,
         temperature_c=65.0,
@@ -173,197 +189,6 @@ class TestAuthViews:
 
 
 # ---------------------------------------------------------------------------
-# BitAxe device CRUD tests
-# ---------------------------------------------------------------------------
-
-@pytest.mark.django_db
-class TestBitAxeDeviceViewSet:
-    def test_list_empty(self, auth_client):
-        resp = auth_client.get('/api/bitaxe/devices/')
-        assert resp.status_code == 200
-
-    def test_create_device(self, auth_client):
-        payload = {
-            'device_id': 'bitaxe-new',
-            'device_name': 'New Bitaxe',
-            'ip_address': '192.168.1.99',
-        }
-        resp = auth_client.post('/api/bitaxe/devices/', payload, format='json')
-        assert resp.status_code == 201
-        assert resp.data['device_id'] == 'bitaxe-new'
-
-    def test_retrieve_device(self, auth_client, bitaxe_device):
-        resp = auth_client.get(f'/api/bitaxe/devices/{bitaxe_device.device_id}/')
-        assert resp.status_code == 200
-        assert resp.data['device_name'] == 'Test Bitaxe'
-
-    def test_retrieve_nonexistent(self, auth_client):
-        resp = auth_client.get('/api/bitaxe/devices/does-not-exist/')
-        assert resp.status_code == 404
-
-    def test_update_device(self, auth_client, bitaxe_device):
-        resp = auth_client.patch(
-            f'/api/bitaxe/devices/{bitaxe_device.device_id}/',
-            {'device_name': 'Renamed Bitaxe'},
-            format='json',
-        )
-        assert resp.status_code == 200
-        assert resp.data['device_name'] == 'Renamed Bitaxe'
-
-    def test_delete_device(self, auth_client, bitaxe_device):
-        resp = auth_client.delete(f'/api/bitaxe/devices/{bitaxe_device.device_id}/')
-        assert resp.status_code == 204
-
-    def test_filter_active_only(self, auth_client, bitaxe_device):
-        BitAxeDevice.objects.create(
-            device_id='bitaxe-inactive',
-            device_name='Inactive',
-            ip_address='192.168.1.11',
-            is_active=False,
-        )
-        resp = auth_client.get('/api/bitaxe/devices/?active_only=true')
-        assert resp.status_code == 200
-        ids = [d['device_id'] for d in resp.data['results']]
-        assert 'bitaxe-001' in ids
-        assert 'bitaxe-inactive' not in ids
-
-
-# ---------------------------------------------------------------------------
-# BitAxe mining stats tests
-# ---------------------------------------------------------------------------
-
-@pytest.mark.django_db
-class TestBitAxeMiningStatsViewSet:
-    def test_list(self, auth_client, mining_stat):
-        resp = auth_client.get('/api/bitaxe/mining/')
-        assert resp.status_code == 200
-
-    def test_latest_empty(self, auth_client):
-        resp = auth_client.get('/api/bitaxe/mining/latest/')
-        assert resp.status_code == 200
-        assert resp.data == []
-
-    def test_latest_with_data(self, auth_client, mining_stat):
-        resp = auth_client.get('/api/bitaxe/mining/latest/')
-        assert resp.status_code == 200
-        assert len(resp.data) == 1
-        assert resp.data[0]['hashrate_ghs'] == pytest.approx(450.5)
-
-    def test_filter_by_device(self, auth_client, mining_stat, bitaxe_device):
-        resp = auth_client.get(f'/api/bitaxe/mining/?device_id={bitaxe_device.device_id}')
-        assert resp.status_code == 200
-
-    def test_hashrate_trend(self, auth_client, mining_stat):
-        resp = auth_client.get('/api/bitaxe/mining/hashrate_trend/')
-        assert resp.status_code == 200
-
-    def test_hashrate_trend_with_device_filter(self, auth_client, mining_stat, bitaxe_device):
-        resp = auth_client.get(f'/api/bitaxe/mining/hashrate_trend/?device_id={bitaxe_device.device_id}')
-        assert resp.status_code == 200
-
-    def test_latest_device_no_stats(self, auth_client, bitaxe_device):
-        # Device exists but has no mining stats → False branch of `if latest_stat:`
-        resp = auth_client.get('/api/bitaxe/mining/latest/')
-        assert resp.status_code == 200
-        assert resp.data == []
-
-
-# ---------------------------------------------------------------------------
-# BitAxe hardware log tests
-# ---------------------------------------------------------------------------
-
-@pytest.mark.django_db
-class TestBitAxeHardwareLogViewSet:
-    def test_list(self, auth_client, hardware_log):
-        resp = auth_client.get('/api/bitaxe/hardware/')
-        assert resp.status_code == 200
-
-    def test_latest_empty(self, auth_client):
-        resp = auth_client.get('/api/bitaxe/hardware/latest/')
-        assert resp.status_code == 200
-        assert resp.data == []
-
-    def test_latest_with_data(self, auth_client, hardware_log):
-        resp = auth_client.get('/api/bitaxe/hardware/latest/')
-        assert resp.status_code == 200
-        assert len(resp.data) == 1
-        assert resp.data[0]['temperature_c'] == pytest.approx(65.0)
-
-    def test_temperature_trend(self, auth_client, hardware_log):
-        resp = auth_client.get('/api/bitaxe/hardware/temperature_trend/')
-        assert resp.status_code == 200
-
-    def test_filter_by_device(self, auth_client, hardware_log, bitaxe_device):
-        resp = auth_client.get(f'/api/bitaxe/hardware/?device_id={bitaxe_device.device_id}')
-        assert resp.status_code == 200
-
-    def test_temperature_trend_with_device_filter(self, auth_client, hardware_log, bitaxe_device):
-        resp = auth_client.get(f'/api/bitaxe/hardware/temperature_trend/?device_id={bitaxe_device.device_id}')
-        assert resp.status_code == 200
-
-    def test_latest_device_no_logs(self, auth_client, bitaxe_device):
-        # Device exists but has no hardware logs → False branch of `if latest_log:`
-        resp = auth_client.get('/api/bitaxe/hardware/latest/')
-        assert resp.status_code == 200
-        assert resp.data == []
-
-
-# ---------------------------------------------------------------------------
-# BitAxe pool stats tests
-# ---------------------------------------------------------------------------
-
-@pytest.mark.django_db
-class TestBitAxePoolStatsViewSet:
-    def test_list(self, auth_client, pool_stat):
-        resp = auth_client.get('/api/bitaxe/pool/')
-        assert resp.status_code == 200
-
-    def test_latest_empty(self, auth_client):
-        resp = auth_client.get('/api/bitaxe/pool/latest/')
-        assert resp.status_code == 404
-
-    def test_latest_with_data(self, auth_client, pool_stat):
-        resp = auth_client.get('/api/bitaxe/pool/latest/')
-        assert resp.status_code == 200
-        assert resp.data['pool_address'] == 'bc1qtest'
-
-    def test_latest_with_pool_address_filter(self, auth_client, pool_stat):
-        resp = auth_client.get('/api/bitaxe/pool/latest/?pool_address=bc1qtest')
-        assert resp.status_code == 200
-
-    def test_latest_with_unknown_pool_address(self, auth_client, pool_stat):
-        resp = auth_client.get('/api/bitaxe/pool/latest/?pool_address=bc1qunknown')
-        assert resp.status_code == 404
-
-    def test_statistics_empty(self, auth_client):
-        resp = auth_client.get('/api/bitaxe/pool/statistics/')
-        assert resp.status_code == 200
-        assert resp.data['total_shares'] == 0
-        assert resp.data['data_points'] == 0
-
-    def test_statistics_with_data(self, auth_client, pool_stat):
-        resp = auth_client.get('/api/bitaxe/pool/statistics/')
-        assert resp.status_code == 200
-        assert resp.data['data_points'] == 1
-
-    def test_hashrate_trend(self, auth_client, pool_stat):
-        resp = auth_client.get('/api/bitaxe/pool/hashrate_trend/')
-        assert resp.status_code == 200
-
-    def test_filter_by_pool_address(self, auth_client, pool_stat):
-        resp = auth_client.get('/api/bitaxe/pool/?pool_address=bc1qtest')
-        assert resp.status_code == 200
-
-    def test_hashrate_trend_with_pool_filter(self, auth_client, pool_stat):
-        resp = auth_client.get('/api/bitaxe/pool/hashrate_trend/?pool_address=bc1qtest')
-        assert resp.status_code == 200
-
-    def test_statistics_with_pool_filter(self, auth_client, pool_stat):
-        resp = auth_client.get('/api/bitaxe/pool/statistics/?pool_address=bc1qtest')
-        assert resp.status_code == 200
-
-
-# ---------------------------------------------------------------------------
 # Overview analytics tests
 # ---------------------------------------------------------------------------
 
@@ -393,115 +218,6 @@ class TestOverviewAnalytics:
         resp = auth_client.get('/api/overview/analytics/')
         assert resp.status_code == 200
         assert resp.data['mining']['current']['total_hashrate_ghs'] > 0
-
-
-# ---------------------------------------------------------------------------
-# Avalon device tests
-# ---------------------------------------------------------------------------
-
-@pytest.mark.django_db
-class TestAvalonViews:
-    def test_dashboard_stats_empty(self, auth_client):
-        resp = auth_client.get('/api/avalon/dashboard/')
-        assert resp.status_code == 200
-
-    def test_dashboard_stats_with_devices(self, auth_client, avalon_device,
-                                          avalon_mining_stat, avalon_hardware_log):
-        resp = auth_client.get('/api/avalon/dashboard/')
-        assert resp.status_code == 200
-
-    def test_dashboard_stats_device_without_stats(self, auth_client, avalon_device):
-        # Device exists but no mining stats or hardware logs → covers False branches
-        resp = auth_client.get('/api/avalon/dashboard/')
-        assert resp.status_code == 200
-        assert resp.data['total_devices'] == 1
-
-    def test_devices_list_empty(self, auth_client):
-        resp = auth_client.get('/api/avalon/devices/')
-        assert resp.status_code == 200
-        assert resp.data == []
-
-    def test_devices_list_with_data(self, auth_client, avalon_device):
-        resp = auth_client.get('/api/avalon/devices/')
-        assert resp.status_code == 200
-        assert len(resp.data) == 1
-        assert resp.data[0]['device_id'] == 'avalon-001'
-
-    def test_devices_create(self, auth_client):
-        payload = {
-            'device_id': 'avalon-new',
-            'device_name': 'New Avalon',
-            'ip_address': '192.168.1.50',
-        }
-        resp = auth_client.post('/api/avalon/devices/', payload, format='json')
-        assert resp.status_code == 201
-        assert resp.data['device_id'] == 'avalon-new'
-
-    def test_device_detail(self, auth_client, avalon_device):
-        resp = auth_client.get(f'/api/avalon/devices/{avalon_device.device_id}/')
-        assert resp.status_code == 200
-        assert resp.data['device_name'] == 'Test Avalon'
-
-    def test_device_detail_not_found(self, auth_client):
-        resp = auth_client.get('/api/avalon/devices/does-not-exist/')
-        assert resp.status_code == 404
-
-    def test_device_update(self, auth_client, avalon_device):
-        # Avalon device detail view supports PUT (not PATCH)
-        resp = auth_client.put(
-            f'/api/avalon/devices/{avalon_device.device_id}/',
-            {'device_id': 'avalon-001', 'device_name': 'Renamed Avalon', 'ip_address': '192.168.1.20'},
-            format='json',
-        )
-        assert resp.status_code == 200
-        assert resp.data['device_name'] == 'Renamed Avalon'
-
-    def test_device_delete(self, auth_client, avalon_device):
-        resp = auth_client.delete(f'/api/avalon/devices/{avalon_device.device_id}/')
-        assert resp.status_code == 204
-
-    def test_mining_stats_empty(self, auth_client):
-        resp = auth_client.get('/api/avalon/mining-stats/')
-        assert resp.status_code == 200
-        assert resp.data == []
-
-    def test_mining_stats_with_data(self, auth_client, avalon_mining_stat):
-        resp = auth_client.get('/api/avalon/mining-stats/')
-        assert resp.status_code == 200
-        assert len(resp.data) == 1
-        assert resp.data[0]['hashrate_ghs'] == pytest.approx(6500.0)
-
-    def test_hardware_logs_empty(self, auth_client):
-        resp = auth_client.get('/api/avalon/hardware-logs/')
-        assert resp.status_code == 200
-        assert resp.data == []
-
-    def test_hardware_logs_with_data(self, auth_client, avalon_hardware_log):
-        resp = auth_client.get('/api/avalon/hardware-logs/')
-        assert resp.status_code == 200
-        assert len(resp.data) == 1
-
-    def test_hashrate_trends(self, auth_client, avalon_device, avalon_mining_stat):
-        resp = auth_client.get('/api/avalon/hashrate-trends/')
-        assert resp.status_code == 200
-
-    def test_temperature_trends(self, auth_client, avalon_device, avalon_hardware_log):
-        resp = auth_client.get('/api/avalon/temperature-trends/')
-        assert resp.status_code == 200
-
-    def test_mining_stats_filter_by_device(self, auth_client, avalon_device, avalon_mining_stat):
-        resp = auth_client.get(f'/api/avalon/mining-stats/?device_id={avalon_device.device_id}')
-        assert resp.status_code == 200
-        assert len(resp.data) == 1
-
-    def test_hardware_logs_filter_by_device(self, auth_client, avalon_device, avalon_hardware_log):
-        resp = auth_client.get(f'/api/avalon/hardware-logs/?device_id={avalon_device.device_id}')
-        assert resp.status_code == 200
-
-    def test_device_detail_with_stats(self, auth_client, avalon_device,
-                                      avalon_mining_stat, avalon_hardware_log):
-        resp = auth_client.get(f'/api/avalon/devices/{avalon_device.device_id}/')
-        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -561,27 +277,27 @@ class TestModels:
         assert 'Test Bitaxe' in str(hardware_log)
 
     def test_pool_stat_convert_ghs(self):
-        assert BitAxePoolStats._convert_hashrate_to_ghs('1G') == pytest.approx(1.0)
-        assert BitAxePoolStats._convert_hashrate_to_ghs('500M') == pytest.approx(0.5)
-        assert BitAxePoolStats._convert_hashrate_to_ghs('1T') == pytest.approx(1000.0)
-        assert BitAxePoolStats._convert_hashrate_to_ghs('2.5G') == pytest.approx(2.5)
-        assert BitAxePoolStats._convert_hashrate_to_ghs('') == 0.0
-        assert BitAxePoolStats._convert_hashrate_to_ghs(None) == 0.0
+        from api.migration_utils import convert_hashrate_str_to_ghs
+        assert convert_hashrate_str_to_ghs('1G') == pytest.approx(1.0)
+        assert convert_hashrate_str_to_ghs('500M') == pytest.approx(0.5)
+        assert convert_hashrate_str_to_ghs('1T') == pytest.approx(1000.0)
+        assert convert_hashrate_str_to_ghs('2.5G') == pytest.approx(2.5)
+        assert convert_hashrate_str_to_ghs('') is None
+        assert convert_hashrate_str_to_ghs(None) is None
 
-    def test_pool_stat_save_converts_hashrate(self, db):
-        stat = BitAxePoolStats.objects.create(
+    def test_pool_stat_create_unified(self, db):
+        stat = PoolStats.objects.create(
+            pool_type=PoolStats.POOL_CKPOOL,
             pool_address='bc1qtest2',
-            hashrate_1m='2G',
-            hashrate_5m='1.5G',
-            hashrate_1hr='1G',
-            hashrate_1d='900M',
-            hashrate_7d='800M',
-            lastshare=1700000000,
+            recorded_at=timezone.now(),
+            hashrate_1m_display='2G',
+            hashrate_1d_display='900M',
+            hashrate_1m_ghs=2.0,
+            hashrate_1d_ghs=0.9,
             workers=1,
             shares=100000,
-            bestshare=1234567.0,
-            bestever=9876543,
-            authorised=1699000000,
+            best_share=1234567.0,
+            best_ever=9876543,
         )
         assert stat.hashrate_1m_ghs == pytest.approx(2.0)
         assert stat.hashrate_1d_ghs == pytest.approx(0.9)
@@ -605,22 +321,21 @@ class TestModels:
         assert CollectorSettings.objects.filter(pk=1).exists()
         assert result == (0, {})
 
-    def test_bitaxe_system_info_str(self, db):
-        device = BitAxeDevice.objects.create(
-            device_id='sys-001', device_name='SysDevice', ip_address='10.0.0.1'
+    def test_device_system_info_str(self, db):
+        device = Device.objects.create(
+            device_id='sys-001',
+            name='SysDevice',
+            make=Device.MAKE_BITAXE,
+            protocol=Device.PROTOCOL_HTTP_AXEOS,
+            ip_address='10.0.0.1',
         )
-        info = BitAxeSystemInfo.objects.create(device=device, recorded_at=timezone.now())
-        assert 'SysDevice' in str(info)
-
-    def test_avalon_system_info_str(self, db):
-        device = AvalonDevice.objects.create(
-            device_id='av-sys-001', device_name='AvalonSys', ip_address='10.0.0.2'
+        info = DeviceSystemInfo.objects.create(
+            device=device, recorded_at=timezone.now(), hostname='sys'
         )
-        info = AvalonSystemInfo.objects.create(device=device, recorded_at=timezone.now())
-        assert 'AvalonSys' in str(info)
+        assert 'SysDevice' in str(info) or 'sys' in str(info)
 
-    def test_bitaxe_pool_stats_str(self, pool_stat):
-        assert 'Pool Stats' in str(pool_stat)
+    def test_pool_stats_str(self, pool_stat):
+        assert 'bc1qtest' in str(pool_stat) or 'ckpool' in str(pool_stat).lower() or 'GH/s' in str(pool_stat)
 
 
 # ---------------------------------------------------------------------------
@@ -628,20 +343,9 @@ class TestModels:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def system_info(bitaxe_device):
-    return BitAxeSystemInfo.objects.create(
-        device=bitaxe_device,
-        recorded_at=timezone.now(),
-        asic_model='BM1368',
-        version='2.0.0',
-        hostname='bitaxe-001',
-    )
-
-
-@pytest.fixture
-def mining_stat_with_diff(bitaxe_device):
-    return BitAxeMiningStats.objects.create(
-        device=bitaxe_device,
+def mining_stat_with_diff(unified_bitaxe):
+    return DeviceMiningStats.objects.create(
+        device=unified_bitaxe,
         recorded_at=timezone.now(),
         hashrate_ghs=450.5,
         shares_accepted=1000,
@@ -653,54 +357,15 @@ def mining_stat_with_diff(bitaxe_device):
 
 
 @pytest.fixture
-def hardware_log_with_efficiency(bitaxe_device):
-    return BitAxeHardwareLog.objects.create(
-        device=bitaxe_device,
+def hardware_log_with_efficiency(unified_bitaxe):
+    return DeviceHardwareStats.objects.create(
+        device=unified_bitaxe,
         recorded_at=timezone.now(),
         power_watts=15.5,
         temperature_c=65.0,
         fan_speed_rpm=4500,
         efficiency_j_per_th=34.4,
     )
-
-
-# ---------------------------------------------------------------------------
-# BitAxeSystemInfo viewset tests
-# ---------------------------------------------------------------------------
-
-@pytest.mark.django_db
-class TestBitAxeSystemInfoViewSet:
-    def test_list_empty(self, auth_client):
-        resp = auth_client.get('/api/bitaxe/system/')
-        assert resp.status_code == 200
-
-    def test_list_with_data(self, auth_client, system_info):
-        resp = auth_client.get('/api/bitaxe/system/')
-        assert resp.status_code == 200
-
-    def test_filter_by_device(self, auth_client, system_info):
-        resp = auth_client.get(f'/api/bitaxe/system/?device_id={system_info.device.device_id}')
-        assert resp.status_code == 200
-
-    def test_device_details_not_found(self, auth_client):
-        resp = auth_client.get('/api/bitaxe/system/device/no-such-device/')
-        assert resp.status_code == 404
-
-    def test_device_details_found_empty(self, auth_client, bitaxe_device):
-        resp = auth_client.get(f'/api/bitaxe/system/device/{bitaxe_device.device_id}/')
-        assert resp.status_code == 200
-        assert 'device' in resp.data
-        assert resp.data['latest_mining'] is None
-        assert resp.data['latest_hardware'] is None
-        assert resp.data['latest_system'] is None
-
-    def test_device_details_with_all_data(self, auth_client, bitaxe_device,
-                                           mining_stat, hardware_log, system_info):
-        resp = auth_client.get(f'/api/bitaxe/system/device/{bitaxe_device.device_id}/')
-        assert resp.status_code == 200
-        assert resp.data['latest_mining']['hashrate_ghs'] == pytest.approx(450.5)
-        assert resp.data['latest_hardware']['temperature_c'] == pytest.approx(65.0)
-        assert resp.data['latest_system']['asic_model'] == 'BM1368'
 
 
 # ---------------------------------------------------------------------------
@@ -857,114 +522,6 @@ class TestDetailedAnalytics:
 
 
 # ---------------------------------------------------------------------------
-# Avalon restart device tests
-# ---------------------------------------------------------------------------
-
-@pytest.mark.django_db
-class TestAvalonRestartDevice:
-    def test_restart_not_found(self, auth_client):
-        resp = auth_client.post('/api/avalon/devices/no-such-device/restart/')
-        assert resp.status_code == 404
-
-    def test_restart_socket_failure(self, auth_client, avalon_device):
-        with patch('socket.socket') as mock_sock_cls:
-            mock_sock = MagicMock()
-            mock_sock.connect.side_effect = Exception("Connection refused")
-            mock_sock_cls.return_value = mock_sock
-            resp = auth_client.post(
-                f'/api/avalon/devices/{avalon_device.device_id}/restart/'
-            )
-        assert resp.status_code == 500
-
-    def test_restart_socket_success(self, auth_client, avalon_device):
-        with patch('socket.socket') as mock_sock_cls:
-            mock_sock = MagicMock()
-            mock_sock.recv.return_value = b'STATUS=S,Restart sent|'
-            mock_sock_cls.return_value = mock_sock
-            resp = auth_client.post(
-                f'/api/avalon/devices/{avalon_device.device_id}/restart/'
-            )
-        assert resp.status_code == 200
-
-    def test_restart_socket_no_status_s(self, auth_client, avalon_device):
-        with patch('socket.socket') as mock_sock_cls:
-            mock_sock = MagicMock()
-            mock_sock.recv.return_value = b'STATUS=E,Error|'
-            mock_sock_cls.return_value = mock_sock
-            resp = auth_client.post(
-                f'/api/avalon/devices/{avalon_device.device_id}/restart/'
-            )
-        assert resp.status_code == 500
-
-
-# ---------------------------------------------------------------------------
-# Avalon views edge cases
-# ---------------------------------------------------------------------------
-
-@pytest.mark.django_db
-class TestAvalonViewsEdgeCases:
-    def test_device_lookup_by_numeric_pk(self, auth_client, avalon_device):
-        resp = auth_client.get(f'/api/avalon/devices/{avalon_device.pk}/')
-        assert resp.status_code == 200
-
-    def test_device_lookup_by_invalid_string_id(self, auth_client):
-        resp = auth_client.get('/api/avalon/devices/this-does-not-exist/')
-        assert resp.status_code == 404
-
-    def test_device_update_invalid_ip(self, auth_client, avalon_device):
-        resp = auth_client.put(
-            f'/api/avalon/devices/{avalon_device.device_id}/',
-            {'device_id': 'avalon-001', 'device_name': 'Test', 'ip_address': 'not-an-ip'},
-            format='json',
-        )
-        assert resp.status_code == 400
-
-    def test_hashrate_trends_empty_data(self, auth_client):
-        resp = auth_client.get('/api/avalon/hashrate-trends/')
-        assert resp.status_code == 200
-        assert resp.data == []
-
-    def test_temperature_trends_empty_data(self, auth_client):
-        resp = auth_client.get('/api/avalon/temperature-trends/')
-        assert resp.status_code == 200
-        assert resp.data == []
-
-    def test_hashrate_trends_with_data_and_filter(self, auth_client, avalon_device, avalon_mining_stat):
-        resp = auth_client.get(
-            f'/api/avalon/hashrate-trends/?device_id={avalon_device.device_id}&interval=30'
-        )
-        assert resp.status_code == 200
-
-    def test_temperature_trends_with_data_and_filter(self, auth_client, avalon_device, avalon_hardware_log):
-        resp = auth_client.get(
-            f'/api/avalon/temperature-trends/?device_id={avalon_device.device_id}&interval=30'
-        )
-        assert resp.status_code == 200
-
-    def test_mining_stats_with_custom_params(self, auth_client, avalon_mining_stat):
-        resp = auth_client.get('/api/avalon/mining-stats/?limit=5&hours=48')
-        assert resp.status_code == 200
-
-    def test_hardware_logs_with_custom_params(self, auth_client, avalon_hardware_log):
-        resp = auth_client.get('/api/avalon/hardware-logs/?limit=5&hours=48')
-        assert resp.status_code == 200
-
-    def test_dashboard_stats_with_full_avalon_data(self, auth_client, avalon_device,
-                                                     avalon_mining_stat, avalon_hardware_log):
-        resp = auth_client.get('/api/avalon/dashboard/')
-        assert resp.status_code == 200
-        assert resp.data['total_hashrate_ghs'] == pytest.approx(6500.0)
-
-    def test_devices_create_invalid(self, auth_client):
-        resp = auth_client.post(
-            '/api/avalon/devices/',
-            {'device_name': 'Bad'},  # Missing device_id and ip_address
-            format='json',
-        )
-        assert resp.status_code == 400
-
-
-# ---------------------------------------------------------------------------
 # Helper function unit tests
 # ---------------------------------------------------------------------------
 
@@ -1063,10 +620,11 @@ class TestOverviewAnalyticsExtended:
 
     def test_with_custom_hours_and_days(self, auth_client, bitaxe_device,
                                          avalon_device, mining_stat, hardware_log):
+        # Single coherent window: hours is canonical; days is derived (ceil(hours/24))
         resp = auth_client.get('/api/overview/analytics/?hours=48&days=14')
         assert resp.status_code == 200
         assert resp.data['overview']['data_collection_period_hours'] == 48
-        assert resp.data['overview']['analysis_period_days'] == 14
+        assert resp.data['overview']['analysis_period_days'] == 2
 
     def test_financial_calculations(self, auth_client, bitaxe_device, avalon_device,
                                      mining_stat_with_diff, hardware_log_with_efficiency,

@@ -1,12 +1,13 @@
 """
-CKPool data collector for Bitaxe mining pool statistics.
-Fetches data from CKPool API and stores it in the database.
+CKPool data collector for mining pool statistics.
+Fetches data from CKPool API, normalizes, writes to pool_stats.
 """
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
+from collectors.normalized import NormalizedPoolSnapshot, PoolDataWriter
 from retrying import retry
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ class CKPoolCollector:
         Initialize CKPool collector.
 
         Args:
-            db_connection: Database connection object
+            db_connection: Open psycopg2 connection used for writes (preferred)
             pool_url: CKPool API base URL
             pool_address: Bitcoin address or pool username
         """
@@ -93,64 +94,70 @@ class CKPoolCollector:
 
         return value * multipliers.get(unit, 1)
 
-    def store_pool_stats(self, stats_data):
-        """
-        Store pool statistics in the database.
+    def normalize_stats(self, stats_data) -> NormalizedPoolSnapshot:
+        """Convert raw CKPool user JSON into NormalizedPoolSnapshot."""
+        h1m = stats_data.get('hashrate1m', '0')
+        h5m = stats_data.get('hashrate5m', '0')
+        h1h = stats_data.get('hashrate1hr', '0')
+        h1d = stats_data.get('hashrate1d', '0')
+        h7d = stats_data.get('hashrate7d', '0')
+        return NormalizedPoolSnapshot(
+            pool_type='ckpool',
+            pool_address=self.pool_address,
+            pool_url=self.pool_url,
+            recorded_at=datetime.now(timezone.utc),
+            hashrate_1m_ghs=self.convert_hashrate_to_ghs(h1m),
+            hashrate_5m_ghs=self.convert_hashrate_to_ghs(h5m),
+            hashrate_1h_ghs=self.convert_hashrate_to_ghs(h1h),
+            hashrate_1d_ghs=self.convert_hashrate_to_ghs(h1d),
+            hashrate_7d_ghs=self.convert_hashrate_to_ghs(h7d),
+            hashrate_1m_display=str(h1m) if h1m is not None else None,
+            hashrate_5m_display=str(h5m) if h5m is not None else None,
+            hashrate_1h_display=str(h1h) if h1h is not None else None,
+            hashrate_1d_display=str(h1d) if h1d is not None else None,
+            hashrate_7d_display=str(h7d) if h7d is not None else None,
+            workers=self._parse_workers(stats_data.get('workers')),
+            shares=int(stats_data.get('shares', 0) or 0),
+            best_share=float(stats_data.get('bestshare', 0) or 0),
+            best_ever=float(stats_data.get('bestever', 0) or 0),
+            last_share_unix=int(stats_data.get('lastshare', 0) or 0) or None,
+            authorised_unix=int(stats_data.get('authorised', 0) or 0) or None,
+            details={'source': 'ckpool'},
+        )
 
-        Args:
-            stats_data: Pool statistics data from API
-        """
+    @staticmethod
+    def _parse_workers(raw):
+        """CKPool may return workers as int, string, or list/dict of worker entries."""
+        if raw is None:
+            return 0
+        if isinstance(raw, bool):
+            return int(raw)
+        if isinstance(raw, (int, float)):
+            return int(raw)
+        if isinstance(raw, (list, tuple, set, dict)):
+            return len(raw)
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return 0
+
+    def store_pool_stats(self, stats_data):
+        """Store pool statistics via PoolDataWriter (unified pool_stats only)."""
         if not stats_data:
             logger.warning("No stats data to store")
             return
 
         try:
-            cursor = self.db.cursor()
-
-            # Convert hashrates to GH/s for easier querying
-            hashrate_1m_ghs = self.convert_hashrate_to_ghs(stats_data.get('hashrate1m', '0'))
-            hashrate_1d_ghs = self.convert_hashrate_to_ghs(stats_data.get('hashrate1d', '0'))
-
-            # Insert pool statistics
-            query = """
-                INSERT INTO bitaxe_pool_stats (
-                    pool_address, recorded_at,
-                    hashrate_1m, hashrate_5m, hashrate_1hr, hashrate_1d, hashrate_7d,
-                    lastshare, workers, shares, bestshare, bestever, authorised,
-                    hashrate_1m_ghs, hashrate_1d_ghs
-                ) VALUES (
-                    %s, %s,
-                    %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s,
-                    %s, %s
-                )
-            """
-
-            values = (
-                self.pool_address,
-                datetime.now(),
-                stats_data.get('hashrate1m', '0'),
-                stats_data.get('hashrate5m', '0'),
-                stats_data.get('hashrate1hr', '0'),
-                stats_data.get('hashrate1d', '0'),
-                stats_data.get('hashrate7d', '0'),
-                stats_data.get('lastshare', 0),
-                stats_data.get('workers', 0),
-                stats_data.get('shares', 0),
-                stats_data.get('bestshare', 0.0),
-                stats_data.get('bestever', 0),
-                stats_data.get('authorised', 0),
-                hashrate_1m_ghs,
-                hashrate_1d_ghs,
+            snapshot = self.normalize_stats(stats_data)
+            # Reuse the open collector connection — never rebuild DSN (password is stripped)
+            writer = PoolDataWriter(connection=self.db)
+            writer.write_snapshot(snapshot)
+            logger.info(
+                f"Stored pool stats: {stats_data.get('hashrate1m', 'N/A')} "
+                f"({snapshot.workers} workers) @ {snapshot.recorded_at}"
             )
-
-            cursor.execute(query, values)
-            self.db.commit()
-            logger.info(f"Stored pool stats: {stats_data.get('hashrate1m', 'N/A')} @ {datetime.now()}")
-
         except Exception as e:
             logger.error(f"Failed to store pool stats: {e}")
-            self.db.rollback()
             raise
 
     def collect(self):

@@ -1,3 +1,5 @@
+import MakeBadge from '@/components/devices/MakeBadge'
+import StatusIndicator from '@/components/status/StatusIndicator'
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -17,7 +19,18 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import NotificationsSettings from '@/components/settings/NotificationsSettings'
+import { useTheme } from '@/components/theme-provider'
 import api from '@/lib/api';
+import {
+  deviceStatusLabel,
+  getDeviceStatus,
+  isDeviceOnline,
+  makeLabel,
+  SUPPORTED_MAKES,
+  unwrapList,
+} from '@/lib/devices'
+import { formatRelativeTime } from '@/lib/formatters'
 import {
   AlertCircle,
   Bell,
@@ -26,11 +39,13 @@ import {
   Cpu,
   DollarSign,
   Edit,
-  EyeOff,
   Plus,
   RefreshCw,
   Server,
+  Monitor,
+  Moon,
   Settings as SettingsIcon,
+  Sun,
   Trash2,
   Wifi,
   WifiOff
@@ -38,9 +53,8 @@ import {
 import { useEffect, useState } from 'react';
 
 export default function SettingsPage() {
-  // Device management
-  const [bitaxeDevices, setBitaxeDevices] = useState([])
-  const [avalonDevices, setAvalonDevices] = useState([])
+  // Device management (unified registry)
+  const [devices, setDevices] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [success, setSuccess] = useState(null)
@@ -48,18 +62,18 @@ export default function SettingsPage() {
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false)
   const [dialogMode, setDialogMode] = useState('add') // 'add' or 'edit'
-  const [dialogDeviceType, setDialogDeviceType] = useState('bitaxe')
   const [currentDevice, setCurrentDevice] = useState(null)
 
   // Form state
   const [formData, setFormData] = useState({
     device_id: '',
     device_name: '',
+    make: 'bitaxe',
     ip_address: '',
     is_active: true,
   })
 
-  // Data collector settings
+  // Data collector + notification settings (shared API singleton)
   const [collectorSettings, setCollectorSettings] = useState({
     polling_interval_minutes: 15,
     device_check_interval_minutes: 5,
@@ -72,19 +86,20 @@ export default function SettingsPage() {
     telegram_bot_token: '',
     telegram_chat_id: '',
     telegram_bot_token_configured: false,
-    // Discord notifications
     discord_enabled: false,
     discord_webhook_url: '',
     discord_webhook_url_configured: false,
-    // Cost analysis settings
+    notification_rules: {},
     energy_rate: 0.12,
     energy_currency: 'USD',
     show_revenue_stats: true,
   })
-  const [showTelegramToken, setShowTelegramToken] = useState(false)
-  const [showDiscordWebhook, setShowDiscordWebhook] = useState(false)
   const [collectorStatus, setCollectorStatus] = useState(null)
   const [savingSettings, setSavingSettings] = useState(false)
+  const [collectorDirty, setCollectorDirty] = useState(false)
+  const [settingsTab, setSettingsTab] = useState('devices')
+  const [pendingTab, setPendingTab] = useState(null)
+  const { theme, setTheme } = useTheme()
 
 
   // Delete confirmation
@@ -100,17 +115,16 @@ export default function SettingsPage() {
       setLoading(true)
       setError(null)
 
-      const [bitaxeRes, avalonRes, collectorRes] = await Promise.all([
-        api.get('/api/bitaxe/devices/').catch(() => ({ data: { results: [] } })),
-        api.get('/api/avalon/devices/').catch(() => ({ data: [] })),
+      const [devicesRes, collectorRes] = await Promise.all([
+        api.get('/api/devices/').catch(() => ({ data: { results: [] } })),
         api.get('/api/settings/collector/').catch(() => ({ data: null })),
       ])
 
-      setBitaxeDevices(bitaxeRes.data.results || bitaxeRes.data || [])
-      setAvalonDevices(avalonRes.data.results || avalonRes.data || [])
+      setDevices(unwrapList(devicesRes.data))
 
       if (collectorRes.data) {
         setCollectorStatus(collectorRes.data)
+        setCollectorDirty(false)
         setCollectorSettings({
           polling_interval_minutes: collectorRes.data.polling_interval_minutes || 15,
           device_check_interval_minutes: collectorRes.data.device_check_interval_minutes || 5,
@@ -123,17 +137,14 @@ export default function SettingsPage() {
           telegram_bot_token: '', // Never returned from API for security
           telegram_chat_id: collectorRes.data.telegram_chat_id || '',
           telegram_bot_token_configured: collectorRes.data.telegram_bot_token_configured || false,
-          // Discord
           discord_enabled: collectorRes.data.discord_enabled || false,
           discord_webhook_url: '', // Never returned from API for security
           discord_webhook_url_configured: collectorRes.data.discord_webhook_url_configured || false,
+          notification_rules: collectorRes.data.notification_rules || {},
           energy_rate: collectorRes.data.energy_rate || 0.12,
           energy_currency: collectorRes.data.energy_currency || 'USD',
           show_revenue_stats: collectorRes.data.show_revenue_stats !== undefined ? collectorRes.data.show_revenue_stats : true,
         })
-        // Reset token/webhook visibility when refreshing
-        setShowTelegramToken(false)
-        setShowDiscordWebhook(false)
       }
     } catch (err) {
       console.error('Error fetching settings data:', err)
@@ -143,25 +154,39 @@ export default function SettingsPage() {
     }
   }
 
-  const openAddDialog = (deviceType) => {
+  const updateCollectorSettings = (next) => {
+    setCollectorSettings(next)
+    setCollectorDirty(true)
+  }
+
+  const requestTabChange = (next) => {
+    if (collectorDirty && (settingsTab === 'collector' || settingsTab === 'notifications') && next !== settingsTab) {
+      setPendingTab(next)
+      return
+    }
+    setSettingsTab(next)
+  }
+
+  const openAddDialog = () => {
     setDialogMode('add')
-    setDialogDeviceType(deviceType)
+    setCurrentDevice(null)
     setFormData({
       device_id: '',
       device_name: '',
+      make: 'bitaxe',
       ip_address: '',
       is_active: true,
     })
     setDialogOpen(true)
   }
 
-  const openEditDialog = (device, deviceType) => {
+  const openEditDialog = (device) => {
     setDialogMode('edit')
-    setDialogDeviceType(deviceType)
     setCurrentDevice(device)
     setFormData({
       device_id: device.device_id,
       device_name: device.device_name,
+      make: device.make || 'bitaxe',
       ip_address: device.ip_address,
       is_active: device.is_active,
     })
@@ -171,43 +196,49 @@ export default function SettingsPage() {
   const handleSaveDevice = async () => {
     try {
       setError(null)
-      const endpoint = dialogDeviceType === 'bitaxe' ? '/api/bitaxe/devices' : '/api/avalon/devices'
+      const payload = {
+        device_id: formData.device_id,
+        device_name: formData.device_name,
+        make: formData.make,
+        ip_address: formData.ip_address,
+        is_active: formData.is_active,
+      }
 
       if (dialogMode === 'add') {
-        await api.post(`${endpoint}/`, formData)
-        setSuccess(`${dialogDeviceType === 'bitaxe' ? 'Bitaxe' : 'Avalon'} device added successfully`)
+        await api.post('/api/devices/', payload)
+        setSuccess(`${makeLabel(formData.make)} device added successfully`)
       } else {
-        await api.put(`${endpoint}/${currentDevice.device_id}/`, formData)
-        setSuccess(`${dialogDeviceType === 'bitaxe' ? 'Bitaxe' : 'Avalon'} device updated successfully`)
+        await api.patch(`/api/devices/${currentDevice.id}/`, payload)
+        setSuccess(`${makeLabel(formData.make)} device updated successfully`)
       }
 
       setDialogOpen(false)
       fetchData()
-
-      // Clear success message after 3 seconds
       setTimeout(() => setSuccess(null), 3000)
     } catch (err) {
       console.error('Error saving device:', err)
-      setError(err.response?.data?.detail || 'Failed to save device')
+      const detail =
+        err.response?.data?.detail ||
+        err.response?.data?.device_id?.[0] ||
+        (typeof err.response?.data === 'object' ? JSON.stringify(err.response.data) : null) ||
+        'Failed to save device'
+      setError(detail)
     }
   }
 
-  const openDeleteDialog = (device, deviceType) => {
-    setDeviceToDelete({ ...device, deviceType })
+  const openDeleteDialog = (device) => {
+    setDeviceToDelete(device)
     setDeleteDialogOpen(true)
   }
 
   const handleDeleteDevice = async () => {
     try {
       setError(null)
-      const endpoint = deviceToDelete.deviceType === 'bitaxe' ? '/api/bitaxe/devices' : '/api/avalon/devices'
-      await api.delete(`${endpoint}/${deviceToDelete.device_id}/`)
-
-      setSuccess(`${deviceToDelete.deviceType === 'bitaxe' ? 'Bitaxe' : 'Avalon'} device deleted successfully`)
+      await api.delete(`/api/devices/${deviceToDelete.id}/`)
+      setSuccess(`${makeLabel(deviceToDelete.make)} device deleted successfully`)
       setDeleteDialogOpen(false)
       setDeviceToDelete(null)
       fetchData()
-
       setTimeout(() => setSuccess(null), 3000)
     } catch (err) {
       console.error('Error deleting device:', err)
@@ -220,13 +251,25 @@ export default function SettingsPage() {
       setSavingSettings(true)
       setError(null)
 
-      await api.post('/api/settings/collector/', collectorSettings)
-      setSuccess('Data collector settings saved successfully')
+      // Do not send empty secrets (keeps existing server-side values)
+      const payload = { ...collectorSettings }
+      if (!payload.telegram_bot_token) delete payload.telegram_bot_token
+      if (!payload.discord_webhook_url) delete payload.discord_webhook_url
 
+      const res = await api.post('/api/settings/collector/', payload)
+      setSuccess(res.data?.message || 'Settings saved successfully')
+      setCollectorDirty(false)
+      // Refresh so notification_rules merges + configured flags update
+      await fetchData()
       setTimeout(() => setSuccess(null), 3000)
     } catch (err) {
       console.error('Error saving collector settings:', err)
-      setError(err.response?.data?.detail || 'Failed to save collector settings')
+      setError(
+        err.response?.data?.error ||
+          err.response?.data?.detail ||
+          (err.response?.data?.errors && JSON.stringify(err.response.data.errors)) ||
+          'Failed to save settings',
+      )
     } finally {
       setSavingSettings(false)
     }
@@ -257,90 +300,127 @@ export default function SettingsPage() {
     return date.toLocaleDateString()
   }
 
-  const DeviceTable = ({ devices, deviceType }) => (
-    <div className="overflow-x-auto sm:mx-0">
-      <Table className="min-w-[600px]">
-        <TableHeader>
-          <TableRow>
-            <TableHead>Device Name</TableHead>
-            <TableHead className="hidden sm:table-cell">Device ID</TableHead>
-            <TableHead>IP Address</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead className="hidden sm:table-cell">Last Seen</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {devices.length === 0 ? (
-            <TableRow>
-              <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                No {deviceType === 'bitaxe' ? 'Bitaxe' : 'Avalon'} devices configured.
-                Click "Add Device" to get started.
-              </TableCell>
-            </TableRow>
-          ) : (
-            devices.map((device) => (
-              <TableRow key={device.id}>
-                <TableCell className="font-medium">
-                  <div>
-                    {device.device_name}
-                    <span className="block sm:hidden text-xs text-muted-foreground font-mono mt-0.5">
-                      {device.device_id}
-                    </span>
-                  </div>
-                </TableCell>
-                <TableCell className="font-mono text-sm hidden sm:table-cell">{device.device_id}</TableCell>
-                <TableCell className="font-mono text-xs sm:text-sm">{device.ip_address}</TableCell>
-                <TableCell>
-                {device.is_active ? (
-                  device.last_seen_at && new Date(device.last_seen_at) > new Date(Date.now() - 5 * 60 * 1000) ? (
-                    <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/20">
-                      <Wifi className="w-3 h-3 mr-1" />
-                      Online
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline" className="bg-yellow-500/10 text-yellow-500 border-yellow-500/20">
-                      <Clock className="w-3 h-3 mr-1" />
-                      Pending
-                    </Badge>
-                  )
-                ) : (
-                  <Badge variant="outline" className="bg-gray-500/10 text-gray-500 border-gray-500/20">
-                    <WifiOff className="w-3 h-3 mr-1" />
-                    Inactive
-                  </Badge>
-                )}
-              </TableCell>
-              <TableCell className="text-muted-foreground hidden sm:table-cell">
-                {formatLastSeen(device.last_seen_at)}
-              </TableCell>
-              <TableCell className="text-right">
-                <div className="flex gap-1 sm:gap-2 justify-end">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => openEditDialog(device, deviceType)}
-                  >
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-destructive hover:text-destructive"
-                    onClick={() => openDeleteDialog(device, deviceType)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+  const DeviceTable = ({ devices: rows }) => {
+    if (rows.length === 0) {
+      return (
+        <p className="py-8 text-center text-sm text-muted-foreground">
+          No devices configured. Click &quot;Add Device&quot; to get started.
+        </p>
+      )
+    }
+
+    const statusUi = (device) => {
+      const st = getDeviceStatus(device)
+      const dot =
+        st === 'online' ? 'online' : st === 'stale' ? 'stale' : st === 'inactive' ? 'unknown' : 'offline'
+      return <StatusIndicator status={dot} showLabel label={deviceStatusLabel(st)} />
+    }
+
+    return (
+      <>
+        {/* Mobile cards */}
+        <div className="space-y-3 md:hidden">
+          {rows.map((device) => (
+            <div
+              key={`${device.make}-${device.device_id}`}
+              className="rounded-lg border border-border/80 p-3"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-medium truncate">{device.device_name}</p>
+                  <p className="mt-0.5 font-mono text-xs text-muted-foreground truncate">
+                    {device.device_id} · {device.ip_address}
+                  </p>
                 </div>
-              </TableCell>
-            </TableRow>
-          ))
-        )}
-      </TableBody>
-    </Table>
-    </div>
-  )
+                <MakeBadge make={device.make} />
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                {statusUi(device)}
+                <span className="text-xs text-muted-foreground">
+                  {formatRelativeTime(device.last_seen_at) || 'Never'}
+                </span>
+              </div>
+              <div className="mt-3 flex justify-end gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9"
+                  onClick={() => openEditDialog(device)}
+                  aria-label={`Edit ${device.device_name}`}
+                >
+                  <Edit className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 text-destructive hover:text-destructive"
+                  onClick={() => openDeleteDialog(device)}
+                  aria-label={`Delete ${device.device_name}`}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Desktop table */}
+        <div className="hidden overflow-x-auto md:block">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Device Name</TableHead>
+                <TableHead>Make</TableHead>
+                <TableHead>Device ID</TableHead>
+                <TableHead>IP Address</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Last Seen</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((device) => (
+                <TableRow key={`${device.make}-${device.device_id}`}>
+                  <TableCell className="font-medium">{device.device_name}</TableCell>
+                  <TableCell>
+                    <MakeBadge make={device.make} />
+                  </TableCell>
+                  <TableCell className="font-mono text-sm">{device.device_id}</TableCell>
+                  <TableCell className="font-mono text-sm">{device.ip_address}</TableCell>
+                  <TableCell>{statusUi(device)}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {formatRelativeTime(device.last_seen_at) || 'Never'}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-9 w-9"
+                        onClick={() => openEditDialog(device)}
+                        aria-label={`Edit ${device.device_name}`}
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-9 w-9 text-destructive hover:text-destructive"
+                        onClick={() => openDeleteDialog(device)}
+                        aria-label={`Delete ${device.device_name}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </>
+    )
+  }
 
   if (loading) {
     return (
@@ -357,18 +437,16 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="p-3 sm:p-6 space-y-4 sm:space-y-6 overflow-hidden">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <SettingsIcon className="h-6 w-6 sm:h-8 sm:w-8" />
-          <div>
-            <h1 className="text-xl sm:text-2xl font-bold">Settings</h1>
-            <p className="text-sm text-muted-foreground">Manage devices and data collection</p>
-          </div>
-        </div>
+    <div className="space-y-4 overflow-hidden sm:space-y-6">
+      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+        <p className="text-xs text-muted-foreground sm:text-sm">
+          Devices, collector, pool, notifications, and appearance
+          {collectorDirty && (
+            <span className="ml-2 font-medium text-status-warning-fg">· Unsaved changes</span>
+          )}
+        </p>
         <Button variant="outline" onClick={fetchData} className="w-full sm:w-auto">
-          <RefreshCw className="h-4 w-4 mr-2" />
+          <RefreshCw className="mr-2 h-4 w-4" />
           Refresh
         </Button>
       </div>
@@ -387,8 +465,8 @@ export default function SettingsPage() {
         </Alert>
       )}
 
-      <Tabs defaultValue="devices" className="space-y-6">
-        <TabsList>
+      <Tabs value={settingsTab} onValueChange={requestTabChange} className="space-y-6">
+        <TabsList className="flex h-auto w-full flex-nowrap justify-start gap-0.5 overflow-x-auto sm:w-auto">
           <TabsTrigger value="devices">
             <Cpu className="h-4 w-4 mr-2" />
             Devices
@@ -397,51 +475,36 @@ export default function SettingsPage() {
             <Server className="h-4 w-4 mr-2" />
             Data Collector
           </TabsTrigger>
+          <TabsTrigger value="notifications">
+            <Bell className="h-4 w-4 mr-2" />
+            Notifications
+          </TabsTrigger>
+          <TabsTrigger value="appearance">
+            <Sun className="h-4 w-4 mr-2" />
+            Appearance
+          </TabsTrigger>
         </TabsList>
 
         {/* Devices Tab */}
         <TabsContent value="devices" className="space-y-4 sm:space-y-6">
-          {/* Bitaxe Devices */}
           <Card>
             <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
                   <Cpu className="h-4 w-4 sm:h-5 sm:w-5" />
-                  Bitaxe Devices
+                  Mining Devices
                 </CardTitle>
                 <CardDescription className="text-xs sm:text-sm">
-                  Manage your Bitaxe mining devices
+                  All miner makes in one registry ({devices.length} device{devices.length !== 1 ? 's' : ''})
                 </CardDescription>
               </div>
-              <Button onClick={() => openAddDialog('bitaxe')} className="w-full sm:w-auto">
+              <Button onClick={openAddDialog} className="w-full sm:w-auto">
                 <Plus className="h-4 w-4 mr-2" />
                 Add Device
               </Button>
             </CardHeader>
             <CardContent className="px-2 sm:px-6">
-              <DeviceTable devices={bitaxeDevices} deviceType="bitaxe" />
-            </CardContent>
-          </Card>
-
-          {/* Avalon Devices */}
-          <Card>
-            <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
-                  <Cpu className="h-4 w-4 sm:h-5 sm:w-5" />
-                  Avalon Devices
-                </CardTitle>
-                <CardDescription className="text-xs sm:text-sm">
-                  Manage your Avalon Nano 3s mining devices
-                </CardDescription>
-              </div>
-              <Button onClick={() => openAddDialog('avalon')} className="w-full sm:w-auto">
-                <Plus className="h-4 w-4 mr-2" />
-                Add Device
-              </Button>
-            </CardHeader>
-            <CardContent className="px-2 sm:px-6">
-              <DeviceTable devices={avalonDevices} deviceType="avalon" />
+              <DeviceTable devices={devices} />
             </CardContent>
           </Card>
         </TabsContent>
@@ -458,7 +521,7 @@ export default function SettingsPage() {
                 Monitor and configure the data collection service
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4 sm:space-y-6 overflow-x-auto">
+            <CardContent className="max-w-2xl space-y-4 overflow-x-auto sm:space-y-6">
               {/* Status badges */}
               <div className="flex flex-col sm:flex-row flex-wrap gap-2 sm:gap-4 min-w-0 max-w-full">
                 <div className="flex items-center gap-2">
@@ -475,7 +538,13 @@ export default function SettingsPage() {
                 )}
                 <div className="flex items-center gap-2 text-muted-foreground text-xs sm:text-sm">
                   <Cpu className="w-4 h-4" />
-                  {bitaxeDevices.length} Bitaxe, {avalonDevices.length} Avalon devices
+                  {SUPPORTED_MAKES.map((m, i) => (
+                    <span key={m.value}>
+                      {i > 0 ? ', ' : ''}
+                      {devices.filter((d) => d.make === m.value).length} {m.label}
+                    </span>
+                  ))}
+                  {' '}({devices.length} total)
                 </div>
               </div>
 
@@ -491,7 +560,7 @@ export default function SettingsPage() {
                     className="w-full"
                     value={collectorSettings.polling_interval_minutes}
                     onChange={(e) =>
-                      setCollectorSettings({
+                      updateCollectorSettings({
                         ...collectorSettings,
                         polling_interval_minutes: parseInt(e.target.value) || 15,
                       })
@@ -512,7 +581,7 @@ export default function SettingsPage() {
                     className="w-full"
                     value={collectorSettings.device_check_interval_minutes}
                     onChange={(e) =>
-                      setCollectorSettings({
+                      updateCollectorSettings({
                         ...collectorSettings,
                         device_check_interval_minutes: parseInt(e.target.value) || 5,
                       })
@@ -530,7 +599,7 @@ export default function SettingsPage() {
                     id="pool_type"
                     value={collectorSettings.pool_type}
                     onValueChange={(value) =>
-                      setCollectorSettings({
+                      updateCollectorSettings({
                         ...collectorSettings,
                         pool_type: value,
                       })
@@ -557,7 +626,7 @@ export default function SettingsPage() {
                       placeholder="bc1q..."
                       value={collectorSettings.ckpool_address}
                       onChange={(e) =>
-                        setCollectorSettings({
+                        updateCollectorSettings({
                           ...collectorSettings,
                           ckpool_address: e.target.value,
                         })
@@ -579,12 +648,12 @@ export default function SettingsPage() {
                       }
                       onValueChange={(value) => {
                         if (value === 'custom') {
-                          setCollectorSettings({
+                          updateCollectorSettings({
                             ...collectorSettings,
                             ckpool_url: '',
                           })
                         } else {
-                          setCollectorSettings({
+                          updateCollectorSettings({
                             ...collectorSettings,
                             ckpool_url: value,
                           })
@@ -612,7 +681,7 @@ export default function SettingsPage() {
                         placeholder="https://your-ckpool-instance.com"
                         value={collectorSettings.ckpool_url}
                         onChange={(e) =>
-                          setCollectorSettings({
+                          updateCollectorSettings({
                             ...collectorSettings,
                             ckpool_url: e.target.value,
                           })
@@ -638,7 +707,7 @@ export default function SettingsPage() {
                       placeholder="bc1q..."
                       value={collectorSettings.publicpool_address}
                       onChange={(e) =>
-                        setCollectorSettings({
+                        updateCollectorSettings({
                           ...collectorSettings,
                           publicpool_address: e.target.value,
                         })
@@ -658,7 +727,7 @@ export default function SettingsPage() {
                       placeholder="http://localhost:3334"
                       value={collectorSettings.publicpool_url}
                       onChange={(e) =>
-                        setCollectorSettings({
+                        updateCollectorSettings({
                           ...collectorSettings,
                           publicpool_url: e.target.value,
                         })
@@ -670,199 +739,6 @@ export default function SettingsPage() {
                   </div>
                 </div>
               )}
-
-              {/* Telegram Notifications Settings */}
-              <div className="pt-4 border-t space-y-4">
-                <div className="flex items-center gap-2">
-                  <Bell className="h-4 w-4" />
-                  <Label className="text-base font-medium">Telegram Notifications</Label>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label htmlFor="telegram_enabled">Enable Telegram Alerts</Label>
-                    <p className="text-xs text-muted-foreground">
-                      Receive notifications when devices go offline or come back online
-                    </p>
-                  </div>
-                  <Switch
-                    id="telegram_enabled"
-                    checked={collectorSettings.telegram_enabled}
-                    onCheckedChange={(checked) =>
-                      setCollectorSettings({
-                        ...collectorSettings,
-                        telegram_enabled: checked,
-                      })
-                    }
-                  />
-                </div>
-
-                {collectorSettings.telegram_enabled && (
-                  <div className="grid gap-4 grid-cols-1 pl-3 sm:pl-4 border-l-2 border-muted w-full max-w-full">
-                    <div className="space-y-2 min-w-0 overflow-hidden">
-                      <Label htmlFor="telegram_bot_token">Bot Token</Label>
-                      {collectorSettings.telegram_bot_token_configured && !showTelegramToken ? (
-                        <div className="flex gap-2">
-                          <div className="flex-1 flex items-center px-3 py-2 rounded-md border bg-muted/50">
-                            <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/20">
-                              <CheckCircle2 className="w-3 h-3 mr-1" />
-                              Configured
-                            </Badge>
-                          </div>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            onClick={() => setShowTelegramToken(true)}
-                            title="Change token"
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      ) : (
-                        <div className="flex gap-2">
-                          <Input
-                            id="telegram_bot_token"
-                            type="password"
-                            placeholder="Enter your Telegram Bot Token"
-                            value={collectorSettings.telegram_bot_token}
-                            onChange={(e) =>
-                              setCollectorSettings({
-                                ...collectorSettings,
-                                telegram_bot_token: e.target.value,
-                              })
-                            }
-                          />
-                          {collectorSettings.telegram_bot_token_configured && (
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => {
-                                setShowTelegramToken(false)
-                                setCollectorSettings({
-                                  ...collectorSettings,
-                                  telegram_bot_token: '',
-                                })
-                              }}
-                              title="Cancel"
-                            >
-                              <EyeOff className="h-4 w-4" />
-                            </Button>
-                          )}
-                        </div>
-                      )}
-                      <p className="text-xs text-muted-foreground">
-                        Create a bot via @BotFather on Telegram to get your token
-                      </p>
-                    </div>
-
-                    <div className="space-y-2 min-w-0 overflow-hidden">
-                      <Label htmlFor="telegram_chat_id">Chat ID</Label>
-                      <Input
-                        id="telegram_chat_id"
-                        type="text"
-                        placeholder="e.g., 123456789 or -100123456789"
-                        value={collectorSettings.telegram_chat_id}
-                        onChange={(e) =>
-                          setCollectorSettings({
-                            ...collectorSettings,
-                            telegram_chat_id: e.target.value,
-                          })
-                        }
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Your personal chat ID or group chat ID (use @userinfobot to find it)
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Discord Notifications Settings */}
-              <div className="pt-4 border-t space-y-4">
-                <div className="flex items-center gap-2">
-                  <Bell className="h-4 w-4" />
-                  <Label className="text-base font-medium">Discord Notifications</Label>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label htmlFor="discord_enabled">Enable Discord Alerts</Label>
-                    <p className="text-xs text-muted-foreground">
-                      Receive notifications via Discord webhook when devices go offline or come back online
-                    </p>
-                  </div>
-                  <Switch
-                    id="discord_enabled"
-                    checked={collectorSettings.discord_enabled}
-                    onCheckedChange={(checked) =>
-                      setCollectorSettings({
-                        ...collectorSettings,
-                        discord_enabled: checked,
-                      })
-                    }
-                  />
-                </div>
-
-                {collectorSettings.discord_enabled && (
-                  <div className="grid gap-4 grid-cols-1 pl-3 sm:pl-4 border-l-2 border-muted w-full max-w-full">
-                    <div className="space-y-2 min-w-0 overflow-hidden">
-                      <Label htmlFor="discord_webhook_url">Webhook URL</Label>
-                      {collectorSettings.discord_webhook_url_configured && !showDiscordWebhook ? (
-                        <div className="flex gap-2">
-                          <div className="flex-1 flex items-center px-3 py-2 rounded-md border bg-muted/50">
-                            <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/20">
-                              <CheckCircle2 className="w-3 h-3 mr-1" />
-                              Configured
-                            </Badge>
-                          </div>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            onClick={() => setShowDiscordWebhook(true)}
-                            title="Change webhook URL"
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      ) : (
-                        <div className="flex gap-2">
-                          <Input
-                            id="discord_webhook_url"
-                            type="password"
-                            placeholder="https://discord.com/api/webhooks/..."
-                            value={collectorSettings.discord_webhook_url}
-                            onChange={(e) =>
-                              setCollectorSettings({
-                                ...collectorSettings,
-                                discord_webhook_url: e.target.value,
-                              })
-                            }
-                          />
-                          {collectorSettings.discord_webhook_url_configured && (
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => {
-                                setShowDiscordWebhook(false)
-                                setCollectorSettings({
-                                  ...collectorSettings,
-                                  discord_webhook_url: '',
-                                })
-                              }}
-                              title="Cancel"
-                            >
-                              <EyeOff className="h-4 w-4" />
-                            </Button>
-                          )}
-                        </div>
-                      )}
-                      <p className="text-xs text-muted-foreground">
-                        Create a webhook in your Discord server channel settings (Server Settings → Integrations → Webhooks)
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
 
               {/* Cost Analysis Settings */}
               <div className="pt-4 border-t space-y-4">
@@ -883,7 +759,7 @@ export default function SettingsPage() {
                         placeholder="0.12"
                         value={collectorSettings.energy_rate}
                         onChange={(e) =>
-                          setCollectorSettings({
+                          updateCollectorSettings({
                             ...collectorSettings,
                             energy_rate: parseFloat(e.target.value) || 0,
                           })
@@ -893,7 +769,7 @@ export default function SettingsPage() {
                       <Select
                         value={collectorSettings.energy_currency}
                         onValueChange={(value) =>
-                          setCollectorSettings({
+                          updateCollectorSettings({
                             ...collectorSettings,
                             energy_currency: value,
                           })
@@ -923,7 +799,7 @@ export default function SettingsPage() {
                     id="show_revenue_stats"
                     checked={collectorSettings.show_revenue_stats}
                     onCheckedChange={(checked) =>
-                      setCollectorSettings({
+                      updateCollectorSettings({
                         ...collectorSettings,
                         show_revenue_stats: checked,
                       })
@@ -953,34 +829,130 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        {/* Notifications Tab */}
+        <TabsContent value="notifications" className="space-y-6">
+          <NotificationsSettings
+            settings={collectorSettings}
+            setSettings={(s) => {
+              setCollectorSettings((prev) => (typeof s === 'function' ? s(prev) : s))
+              setCollectorDirty(true)
+            }}
+            onSave={handleSaveCollectorSettings}
+            saving={savingSettings}
+          />
+        </TabsContent>
+
+        <TabsContent value="appearance" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base sm:text-lg">Theme</CardTitle>
+              <CardDescription className="text-xs sm:text-sm">
+                Choose light, dark, or match the system preference
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="max-w-md space-y-3">
+              {[
+                { value: 'light', label: 'Light', icon: Sun },
+                { value: 'dark', label: 'Dark', icon: Moon },
+                { value: 'system', label: 'System', icon: Monitor },
+              ].map((opt) => {
+                const Icon = opt.icon
+                const active = theme === opt.value
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setTheme(opt.value)}
+                    className={
+                      'flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors ' +
+                      (active
+                        ? 'border-primary bg-accent/50 text-foreground'
+                        : 'border-border hover:bg-muted/50 text-muted-foreground')
+                    }
+                  >
+                    <Icon className="h-4 w-4" strokeWidth={1.75} />
+                    <span className="font-medium">{opt.label}</span>
+                    {active && <span className="ml-auto text-xs text-primary">Active</span>}
+                  </button>
+                )
+              })}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
       </Tabs>
+
+      {/* Unsaved changes guard */}
+      <Dialog open={!!pendingTab} onOpenChange={(open) => { if (!open) setPendingTab(null) }}>
+        <DialogContent onClose={() => setPendingTab(null)}>
+          <DialogHeader>
+            <DialogTitle>Unsaved changes</DialogTitle>
+            <DialogDescription>
+              You have unsaved collector or notification settings. Leave without saving?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingTab(null)}>Stay</Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setCollectorDirty(false)
+                setSettingsTab(pendingTab)
+                setPendingTab(null)
+                fetchData()
+              }}
+            >
+              Discard
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
 
       {/* Add/Edit Device Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent onClose={() => setDialogOpen(false)}>
           <DialogHeader>
             <DialogTitle>
-              {dialogMode === 'add' ? 'Add' : 'Edit'} {dialogDeviceType === 'bitaxe' ? 'Bitaxe' : 'Avalon'} Device
+              {dialogMode === 'add' ? 'Add Device' : 'Edit Device'}
             </DialogTitle>
             <DialogDescription>
               {dialogMode === 'add'
-                ? 'Enter the details for the new device.'
+                ? 'Choose the miner make and enter connection details.'
                 : 'Update the device configuration.'}
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
+              <Label htmlFor="make">Make</Label>
+              <Select
+                id="make"
+                value={formData.make}
+                onValueChange={(value) => setFormData({ ...formData, make: value })}
+                disabled={dialogMode === 'edit'}
+              >
+                {SUPPORTED_MAKES.map((m) => (
+                  <SelectOption key={m.value} value={m.value}>{m.label}</SelectOption>
+                ))}
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Manufacturer / firmware family (more makes can be added later)
+              </p>
+            </div>
+
+            <div className="grid gap-2">
               <Label htmlFor="device_id">Device ID</Label>
               <Input
                 id="device_id"
-                placeholder="e.g., bitaxe-001 or avalon-001"
+                placeholder="e.g., bitaxe-001 or living-room"
                 value={formData.device_id}
                 onChange={(e) => setFormData({ ...formData, device_id: e.target.value })}
                 disabled={dialogMode === 'edit'}
               />
               <p className="text-xs text-muted-foreground">
-                Unique identifier for this device
+                Unique identifier for this device within its make
               </p>
             </div>
 
@@ -1006,7 +978,7 @@ export default function SettingsPage() {
                 onChange={(e) => setFormData({ ...formData, ip_address: e.target.value })}
               />
               <p className="text-xs text-muted-foreground">
-                The device's local network IP address
+                The device&apos;s local network IP address
               </p>
             </div>
 
