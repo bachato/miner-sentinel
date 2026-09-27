@@ -7,7 +7,7 @@ set -e
 
 # Configuration
 DOCKER_HUB_USER="dcbert"
-VERSION="${VERSION:-v1.0.2}"
+VERSION="${VERSION:-v1.2.0}"
 IMAGES=("backend" "frontend" "data-service")
 
 # Colors for output

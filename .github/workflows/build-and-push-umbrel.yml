@@ -13,9 +13,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag to publish (e.g. v1.0.3)'
+        description: 'Version tag to publish (e.g. v1.2.0)'
         required: true
-        default: 'v1.0.3'
+        default: 'v1.2.0'
 
 env:
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}

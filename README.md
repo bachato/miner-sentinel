@@ -10,6 +10,7 @@
 
 ![MinerSentinel Overview](docs/images/overview-dashboard.png)
 
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://www.docker.com/)
 [![Umbrel](https://img.shields.io/badge/Umbrel-Compatible-purple.svg)](https://umbrel.com/)
